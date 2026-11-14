@@ -141,3 +141,8 @@ SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori VPN")
 SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
 SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/linkori_support")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
+
+# API-доступ и сервисные креды для проверочного стенда (probes)
+PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
+PROBE_XRAY_UUID = os.getenv("PROBE_XRAY_UUID", "")
+PROBE_SS_PASSWORD = os.getenv("PROBE_SS_PASSWORD", "")

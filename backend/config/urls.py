@@ -11,6 +11,7 @@ def healthcheck(request):
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/health/", healthcheck, name="api-health"),
+    path("api/probes/", include("probes.urls")),
 ]
 
 # В режиме разработки можно тестировать шлюз подписок через /sub/{token}
