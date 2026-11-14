@@ -54,7 +54,7 @@ def build_subscription_headers(subscription: Subscription) -> dict[str, str]:
         "content-disposition": 'attachment; filename="linkori"',
         "support-url": settings.SUB_SUPPORT_URL,
         "profile-web-page-url": settings.SUB_WEB_URL,
-        "x-hwid-active": "true",
+        "x-hwid-active": "true",}
 
 
 class SubscriptionGatewayView(View):
