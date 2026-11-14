@@ -39,3 +39,13 @@ media/
 .vscode/
 *.swp
 *.swo
+
+# Sensetive info
+.env
+backend/.env
+*.env.local
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/staticfiles/
