@@ -192,5 +192,3 @@ class SubscriptionGatewayView(View):
             response[header_name] = header_value
         response["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return response
-
-    }
