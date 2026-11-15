@@ -69,7 +69,7 @@ class User(AbstractUser):
         return Decimal(self.balance_kopeks) / Decimal(100)
 
     def __str__(self) -> str:
-        if self.telegram_username:
+        if self.telegram_username and self.telegram_username != str(self.telegram_id):
             return f"@{self.telegram_username} ({self.telegram_id})"
         if self.telegram_id:
             return f"tg:{self.telegram_id}"

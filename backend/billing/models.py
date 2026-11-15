@@ -10,6 +10,11 @@ def generate_sub_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+def generate_ss2022_password() -> str:
+    # Заглушка для исторической миграции billing/migrations/0001_initial.py
+    return ""
+
+
 class Plan(models.Model):
     code = models.SlugField(max_length=64, unique=True, verbose_name="Код тарифа")
     name = models.CharField(max_length=128, verbose_name="Название")

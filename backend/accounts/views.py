@@ -24,7 +24,8 @@ class BotGetOrCreateUserView(APIView):
         serializer.is_valid(raise_exception=True)
 
         telegram_id = serializer.validated_data["telegram_id"]
-        telegram_username = serializer.validated_data["telegram_username"].lstrip("@").strip()
+        raw_username = (serializer.validated_data.get("telegram_username") or "").lstrip("@").strip()
+        telegram_username = raw_username or str(telegram_id)
         sync_panels = serializer.validated_data["sync_panels"]
 
         try:
@@ -39,7 +40,7 @@ class BotGetOrCreateUserView(APIView):
             user = User.objects.get(telegram_id=telegram_id)
             created = False
 
-        if telegram_username and user.telegram_username != telegram_username:
+        if user.telegram_username != telegram_username:
             user.telegram_username = telegram_username
             user.save(update_fields=["telegram_username"])
 

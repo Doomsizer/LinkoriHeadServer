@@ -7,6 +7,7 @@ class BotGetOrCreateUserSerializer(serializers.Serializer):
         max_length=64,
         required=False,
         allow_blank=True,
+        allow_null=True,
         default="",
     )
     sync_panels = serializers.BooleanField(required=False, default=True)
