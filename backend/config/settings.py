@@ -137,9 +137,9 @@ CELERY_BEAT_SCHEDULE = {
 
 # Шлюз подписок
 SUB_GATEWAY_HOST = os.getenv("SUB_GATEWAY_HOST", "sub.linkori.org").lower()
-SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori VPN")
+SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori Proxy")
 SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
-SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/linkori_support")
+SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/Linkorisupport")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 
 # Токены внутренних интеграций (стенд проверок и Telegram-бот)

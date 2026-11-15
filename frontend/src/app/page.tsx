@@ -29,6 +29,10 @@ const FAQS = [
     a: "Linkori предоставляет технические услуги доступа к выделенной приватной прокси-инфраструктуре для защищенной передачи данных, повышения стабильности маршрутизации и безопасности в публичных сетях.",
   },
   {
+    q: "Как оформить доступ — на сайте или через Telegram?",
+    a: "Оформить доступ можно прямо на сайте в разделе тарифов, а также через официального Telegram-бота @linkoribot.",
+  },
+  {
     q: "На каких устройствах можно использовать подключение?",
     a: "Сервис работает на iOS, Android, Windows, macOS и Linux через популярные клиентские приложения (Happ, v2RayTun, Hiddify).",
   },
@@ -38,7 +42,7 @@ const FAQS = [
   },
   {
     q: "Как связаться со службой поддержки?",
-    a: "Вы можете написать напрямую оператору поддержки в Telegram @linkori_support или на почту support@linkori.org.",
+    a: "Вы можете написать напрямую оператору поддержки в Telegram @Linkorisupport или на почту support@linkori.org.",
   },
 ];
 
@@ -69,7 +73,15 @@ export default async function HomePage() {
                 Выбрать тариф и подключиться
               </Link>
               <a
-                href="https://t.me/linkori_support"
+                href="https://t.me/linkoribot"
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-6 py-3.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20"
+              >
+                Открыть бот @linkoribot
+              </a>
+              <a
+                href="https://t.me/Linkorisupport"
                 target="_blank"
                 rel="noreferrer"
                 className="rounded-xl border border-border bg-surface px-6 py-3.5 text-sm font-medium text-slate-200 transition hover:border-slate-500"

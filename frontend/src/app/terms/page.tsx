@@ -8,7 +8,7 @@ export default async function TermsPage() {
   const title = docs?.terms_of_service.title || "Пользовательское соглашение";
   const text =
     docs?.terms_of_service.text ||
-    "Пользовательское соглашение сервиса Linkori (linkori.org). Использование приватного прокси-сервиса лежит полностью на Пользователе. Поддержка: support@linkori.org, @linkori_support.";
+    "Пользовательское соглашение сервиса Linkori (linkori.org). Использование приватного прокси-сервиса лежит полностью на Пользователе. Поддержка: support@linkori.org, @Linkorisupport. Бот: @linkoribot.";
 
   return (
     <section className="mx-auto max-w-4xl px-4 py-14">

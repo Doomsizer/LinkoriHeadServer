@@ -18,7 +18,7 @@ export function Footer() {
           </div>
 
           <div>
-            <div className="text-sm font-semibold text-white">Документы</div>
+            <div className="text-sm font-semibold text-white">Документы и бот</div>
             <ul className="mt-3 space-y-2 text-sm text-slate-400">
               <li>
                 <Link href="/privacy" className="transition hover:text-white">
@@ -35,6 +35,16 @@ export function Footer() {
                   Тарифы и оплата
                 </Link>
               </li>
+              <li>
+                <a
+                  href="https://t.me/linkoribot"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-400 hover:underline"
+                >
+                  Telegram-бот @linkoribot
+                </a>
+              </li>
             </ul>
           </div>
 
@@ -42,14 +52,14 @@ export function Footer() {
             <div className="text-sm font-semibold text-white">Поддержка и контакты</div>
             <ul className="mt-3 space-y-2 text-sm text-slate-400">
               <li>
-                Telegram:{" "}
+                Поддержка Telegram:{" "}
                 <a
-                  href="https://t.me/linkori_support"
+                  href="https://t.me/Linkorisupport"
                   target="_blank"
                   rel="noreferrer"
                   className="text-blue-400 hover:underline"
                 >
-                  @linkori_support
+                  @Linkorisupport
                 </a>
               </li>
               <li>

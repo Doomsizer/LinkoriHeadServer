@@ -8,7 +8,7 @@ export default async function PrivacyPage() {
   const title = docs?.privacy_policy.title || "Политика конфиденциальности";
   const text =
     docs?.privacy_policy.text ||
-    "Политика конфиденциальности сервиса Linkori (linkori.org). По вопросам обработки данных обращайтесь на support@linkori.org или @linkori_support.";
+    "Политика конфиденциальности сервиса Linkori (linkori.org). По вопросам обработки данных обращайтесь на support@linkori.org или @Linkorisupport.";
 
   return (
     <section className="mx-auto max-w-4xl px-4 py-14">

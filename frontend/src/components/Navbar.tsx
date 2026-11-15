@@ -29,20 +29,28 @@ export function Navbar() {
           </Link>
         </nav>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <a
-            href="https://t.me/linkori_support"
+            href="https://t.me/Linkorisupport"
             target="_blank"
             rel="noreferrer"
-            className="rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 hover:text-white"
+            className="hidden rounded-lg border border-border px-3.5 py-2 text-xs font-medium text-slate-200 transition hover:border-slate-500 hover:text-white sm:inline-block"
           >
             Поддержка
+          </a>
+          <a
+            href="https://t.me/linkoribot"
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg border border-blue-500/40 bg-blue-500/10 px-3.5 py-2 text-xs font-semibold text-blue-300 transition hover:bg-blue-500/20"
+          >
+            Telegram-бот
           </a>
           <Link
             href="/#pricing"
             className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-500"
           >
-            Выбрать тариф
+            Тарифы
           </Link>
         </div>
       </div>

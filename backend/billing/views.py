@@ -87,7 +87,7 @@ class PublicCheckoutStubView(APIView):
                 "message": (
                     "Оплата временно недоступна: платежная система проходит финальное "
                     "подключение. Пожалуйста, попробуйте позже или напишите в поддержку "
-                    "@linkori_support."
+                    "@Linkorisupport."
                 ),
             },
             status=status.HTTP_200_OK,
@@ -133,6 +133,6 @@ class MockPaymentView(View):
         return HttpResponse(
             "<!DOCTYPE html><html lang='ru'><meta charset='utf-8'><body>"
             "<h1>Оплата прошла успешно!</h1>"
-            "<p>Вернитесь в Telegram-бота и нажмите кнопку проверки оплаты.</p>"
+            "<p>Вернитесь в Telegram-бота @linkoribot и нажмите кнопку проверки оплаты.</p>"
             "</body></html>"
         )
