@@ -1,3 +1,24 @@
+from django.contrib import admin
+
+from .models import NodeInbound, VpnNode
+
+
+class NodeInboundInline(admin.TabularInline):
+    model = NodeInbound
+    extra = 0
+    fields = (
+        "xui_inbound_id",
+        "protocol",
+        "display_name",
+        "connect_host",
+        "connect_port",
+        "is_enabled",
+        "health_status",
+        "last_latency_ms",
+    )
+    readonly_fields = ("last_latency_ms", "last_checked_at")
+
+
 @admin.register(VpnNode)
 class VpnNodeAdmin(admin.ModelAdmin):
     list_display = (
@@ -34,3 +55,22 @@ class VpnNodeAdmin(admin.ModelAdmin):
         if obj.panel_username:
             return "Login/Pass"
         return "Не задана"
+
+
+@admin.register(NodeInbound)
+class NodeInboundAdmin(admin.ModelAdmin):
+    list_display = (
+        "display_name",
+        "node",
+        "protocol",
+        "connect_host",
+        "connect_port",
+        "is_enabled",
+        "health_status",
+        "last_latency_ms",
+        "last_checked_at",
+    )
+    list_filter = ("protocol", "health_status", "is_enabled", "node__country_code")
+    search_fields = ("display_name", "connect_host", "node__name", "node__ip_address")
+    raw_id_fields = ("node",)
+    readonly_fields = ("last_checked_at",)
