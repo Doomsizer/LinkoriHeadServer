@@ -16,6 +16,7 @@ from .models import (
 from .tasks import provision_subscription_to_panels
 
 GIGABYTE = 1024 ** 3
+MAX_TRANSACTION_KOPEKS = 1_000_000  # 10 000 руб.
 
 
 class BillingError(Exception):
@@ -39,6 +40,7 @@ def format_iso_utc(dt) -> str:
 def serialize_plan(plan: Plan) -> dict:
     return {
         "id": plan.id,
+        "code": plan.code,
         "name": plan.name,
         "description": plan.description,
         "duration_days": plan.duration_days,
@@ -96,7 +98,6 @@ def grant_or_extend_subscription(user: User, plan: Plan, now=None) -> Subscripti
         )
         return active_sub
 
-    # Если была истекшая подписка, продлеваем ее (сохраняя прежний sub_token клиента)
     expired_sub = (
         Subscription.objects.select_for_update()
         .filter(
@@ -169,6 +170,9 @@ def pay_with_balance(telegram_id: int, plan_id: int) -> tuple[Payment, Subscript
     if plan is None:
         raise BillingNotFoundError("Тариф не найден")
 
+    if plan.price_kopeks > MAX_TRANSACTION_KOPEKS:
+        raise BillingError("Сумма одной транзакции не должна превышать 10 000 руб.")
+
     user = User.objects.select_for_update().filter(telegram_id=telegram_id).first()
     if user is None:
         raise BillingNotFoundError("Пользователь не найден")
@@ -200,10 +204,13 @@ def pay_with_balance(telegram_id: int, plan_id: int) -> tuple[Payment, Subscript
 
 
 @transaction.atomic
-def create_external_payment(telegram_id: int, plan_id: int) -> Payment:
+def create_external_payment(telegram_id: int, plan_id: int, email: str = "") -> Payment:
     plan = Plan.objects.filter(id=plan_id, is_active=True).first()
     if plan is None:
         raise BillingNotFoundError("Тариф не найден")
+
+    if plan.price_kopeks > MAX_TRANSACTION_KOPEKS:
+        raise BillingError("Сумма одной транзакции не должна превышать 10 000 руб.")
 
     user = User.objects.filter(telegram_id=telegram_id).first()
     if user is None:
@@ -218,6 +225,7 @@ def create_external_payment(telegram_id: int, plan_id: int) -> Payment:
     else:
         raise BillingError(f"Платежный провайдер '{provider}' еще не настроен")
 
+    metadata = {"email": email} if email else {}
     return Payment.objects.create(
         payment_id=pay_id,
         user=user,
@@ -227,6 +235,7 @@ def create_external_payment(telegram_id: int, plan_id: int) -> Payment:
         amount_kopeks=plan.price_kopeks,
         status=Payment.Status.PENDING,
         payment_url=payment_url,
+        metadata=metadata,
     )
 
 
