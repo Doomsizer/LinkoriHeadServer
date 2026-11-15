@@ -1,6 +1,7 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 
 from .models import NodeInbound, VpnNode
+from .xui_sync import XuiSyncError, sync_node_inbounds
 
 
 class NodeInboundInline(admin.TabularInline):
@@ -27,6 +28,7 @@ class VpnNodeAdmin(admin.ModelAdmin):
         "flag_emoji",
         "ip_address",
         "auth_type",
+        "inbounds_count",
         "is_enabled",
         "priority",
         "updated_at",
@@ -35,6 +37,7 @@ class VpnNodeAdmin(admin.ModelAdmin):
     search_fields = ("name", "country_code", "ip_address", "panel_url")
     ordering = ("priority", "name")
     inlines = (NodeInboundInline,)
+    actions = ("sync_selected_nodes",)
     fieldsets = (
         (
             "Основное",
@@ -43,7 +46,13 @@ class VpnNodeAdmin(admin.ModelAdmin):
         (
             "Подключение к 3x-ui",
             {
-                "fields": ("panel_url", "panel_api_token", "panel_username", "panel_password"),
+                "fields": (
+                    "panel_url",
+                    "panel_api_token",
+                    "panel_verify_ssl",
+                    "panel_username",
+                    "panel_password",
+                ),
             },
         ),
     )
@@ -55,6 +64,52 @@ class VpnNodeAdmin(admin.ModelAdmin):
         if obj.panel_username:
             return "Login/Pass"
         return "Не задана"
+
+    @admin.display(description="Инбаундов")
+    def inbounds_count(self, obj):
+        return obj.inbounds.count()
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if obj.is_enabled and (obj.panel_api_token or (obj.panel_username and obj.panel_password)):
+            try:
+                res = sync_node_inbounds(obj)
+                self.message_user(
+                    request,
+                    (
+                        f"Инбаунды ноды «{obj.name}» синхронизированы: "
+                        f"создано {res.created}, обновлено {res.updated}, "
+                        f"отключено {res.disabled}, пропущено {res.skipped}."
+                    ),
+                    level=messages.SUCCESS,
+                )
+            except XuiSyncError as exc:
+                self.message_user(
+                    request,
+                    f"Нода «{obj.name}» сохранена, но синхронизация 3x-ui не удалась: {exc}",
+                    level=messages.WARNING,
+                )
+
+    @admin.action(description="Синхронизировать инбаунды из 3x-ui")
+    def sync_selected_nodes(self, request, queryset):
+        for node in queryset:
+            try:
+                res = sync_node_inbounds(node)
+                self.message_user(
+                    request,
+                    (
+                        f"Нода «{node.name}»: создано {res.created}, "
+                        f"обновлено {res.updated}, отключено {res.disabled}, "
+                        f"пропущено {res.skipped}."
+                    ),
+                    level=messages.SUCCESS,
+                )
+            except XuiSyncError as exc:
+                self.message_user(
+                    request,
+                    f"Ошибка синхронизации «{node.name}»: {exc}",
+                    level=messages.ERROR,
+                )
 
 
 @admin.register(NodeInbound)

@@ -35,6 +35,11 @@ class VpnNode(models.Model):
         default="",
         verbose_name="Пароль панели (legacy)",
     )
+    panel_verify_ssl = models.BooleanField(
+        default=False,
+        verbose_name="Проверять SSL панели",
+        help_text="Выключите, если панель 3x-ui работает по IP с самоподписанным сертификатом",
+    )
     is_enabled = models.BooleanField(
         default=True,
         db_index=True,

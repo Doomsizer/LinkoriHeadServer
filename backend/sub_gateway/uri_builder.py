@@ -46,7 +46,6 @@ def should_use_sip002_for_ss(
 
 
 def _format_host(host: str) -> str:
-    # Оборачиваем IPv6-адрес в квадратные скобки, если они не заданы
     if ":" in host and not host.startswith("["):
         return f"[{host}]"
     return host
@@ -55,14 +54,16 @@ def _format_host(host: str) -> str:
 def _build_remark(inbound: NodeInbound) -> str:
     flag = inbound.node.flag_emoji.strip()
     name = inbound.display_name.strip()
-    label = f"{flag} {name}".strip() if flag else name
+    if flag and not name.startswith(flag):
+        label = f"{flag} {name}"
+    else:
+        label = name
     return quote(label, safe="")
 
 
 def _clean_query(params: dict[str, str | int | None]) -> str:
     filtered = {k: str(v) for k, v in params.items() if v is not None and v != ""}
     return urlencode(filtered)
-
 
 
 def build_vless_reality_uri(subscription: Subscription, inbound: NodeInbound) -> str:
@@ -139,8 +140,6 @@ def build_ss_uri(
     method = extra.get("method", "2022-blake3-aes-256-gcm")
     server_psk = extra.get("server_psk", "")
 
-    # Если 2022-blake3-aes-128-gcm требует 16-байтный ключ, можно обрезать/передать отдельный ключ;
-    # по умолчанию ss_password хранит 32-байтный ключ в base64 для aes-256/chacha20.
     user_psk = subscription.ss_password
     password = f"{server_psk}:{user_psk}" if server_psk else user_psk
 
