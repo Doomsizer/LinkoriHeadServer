@@ -1,11 +1,12 @@
 from django.contrib import admin
 
-from .models import Plan, Subscription, SubscriptionDevice
+from .models import Payment, Plan, ReferralReward, Subscription, SubscriptionDevice
 
 
 @admin.register(Plan)
 class PlanAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "code",
         "name",
         "duration_days",
@@ -16,7 +17,7 @@ class PlanAdmin(admin.ModelAdmin):
         "sort_order",
     )
     list_filter = ("is_active", "duration_days")
-    search_fields = ("code", "name")
+    search_fields = ("code", "name", "description")
     ordering = ("sort_order", "price_kopeks")
 
 
@@ -81,6 +82,7 @@ class SubscriptionAdmin(admin.ModelAdmin):
 @admin.register(SubscriptionDevice)
 class SubscriptionDeviceAdmin(admin.ModelAdmin):
     list_display = (
+        "id",
         "hwid",
         "subscription",
         "device_os",
@@ -110,3 +112,31 @@ class SubscriptionDeviceAdmin(admin.ModelAdmin):
     @admin.action(description="Разблокировать выбранные устройства")
     def unblock_devices(self, request, queryset):
         queryset.update(is_blocked=False)
+
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = (
+        "payment_id",
+        "user",
+        "plan",
+        "method",
+        "provider",
+        "amount_kopeks",
+        "status",
+        "paid_at",
+        "created_at",
+    )
+    list_filter = ("status", "method", "provider", "created_at")
+    search_fields = ("=payment_id", "=external_id", "=user__telegram_id", "user__telegram_username")
+    raw_id_fields = ("user", "subscription")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ReferralReward)
+class ReferralRewardAdmin(admin.ModelAdmin):
+    list_display = ("id", "referrer", "referred_user", "amount_kopeks", "created_at")
+    list_filter = ("created_at",)
+    search_fields = ("=referrer__telegram_id", "=referred_user__telegram_id")
+    raw_id_fields = ("referrer", "referred_user", "payment")
+    readonly_fields = ("created_at",)

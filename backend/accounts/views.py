@@ -12,8 +12,9 @@ from .serializers import BotGetOrCreateUserSerializer
 
 class BotGetOrCreateUserView(APIView):
     """
-    Ищет пользователя по telegram_id или создает нового с единым xray_uuid
-    и при необходимости заводит его на всех активных панелях 3x-ui.
+    Ищет пользователя по telegram_id или создает нового с единым xray_uuid,
+    привязывает пригласившего по referred_by_code (при создании) и заводит
+    клиента на активных панелях 3x-ui.
     """
 
     authentication_classes = []
@@ -26,7 +27,14 @@ class BotGetOrCreateUserView(APIView):
         telegram_id = serializer.validated_data["telegram_id"]
         raw_username = (serializer.validated_data.get("telegram_username") or "").lstrip("@").strip()
         telegram_username = raw_username or str(telegram_id)
+        ref_code = (serializer.validated_data.get("referred_by_code") or "").strip()
         sync_panels = serializer.validated_data["sync_panels"]
+
+        referrer = None
+        if ref_code:
+            candidate = User.objects.filter(referral_code__iexact=ref_code).first()
+            if candidate is not None and candidate.telegram_id != telegram_id:
+                referrer = candidate
 
         try:
             user, created = User.objects.get_or_create(
@@ -34,6 +42,7 @@ class BotGetOrCreateUserView(APIView):
                 defaults={
                     "username": f"tg_{telegram_id}",
                     "telegram_username": telegram_username,
+                    "referred_by": referrer,
                 },
             )
         except IntegrityError:

@@ -115,6 +115,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "EXCEPTION_HANDLER": "config.exceptions.custom_exception_handler",
 }
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/1")
@@ -127,6 +128,10 @@ CELERY_BEAT_SCHEDULE = {
     "probes-check-nodes-health": {
         "task": "probes.tasks.check_nodes_health",
         "schedule": 60.0,
+    },
+    "billing-expire-subscriptions": {
+        "task": "billing.tasks.expire_overdue_subscriptions",
+        "schedule": 120.0,
     },
 }
 
@@ -141,3 +146,8 @@ SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
 PROBE_XRAY_UUID = os.getenv("PROBE_XRAY_UUID", "")
 BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "")
+
+# Биллинг, рефералка и платежный шлюз
+REFERRAL_BONUS_PERCENT = int(os.getenv("REFERRAL_BONUS_PERCENT", "15"))
+PAYMENT_PROVIDER = os.getenv("PAYMENT_PROVIDER", "stub").lower()
+ALLOW_STUB_PAYMENTS = os.getenv("ALLOW_STUB_PAYMENTS", "1") == "1"

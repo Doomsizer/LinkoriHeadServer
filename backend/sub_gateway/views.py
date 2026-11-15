@@ -15,6 +15,12 @@ from .uri_builder import build_subscription_payload
 
 HWID_REGEX = re.compile(r"^[a-zA-Z0-9=_-]{8,128}$")
 
+DEEPLINK_SCHEMES = {
+    "happ": ("Happ", "happ://add/{sub_url}"),
+    "v2raytun": ("v2RayTun", "v2raytun://import/{sub_url}"),
+    "hiddify": ("Hiddify", "hiddify://import/{sub_url}"),
+}
+
 
 def get_client_ip(request) -> str | None:
     x_real_ip = request.headers.get("X-Real-IP", "").strip()
@@ -54,7 +60,37 @@ def build_subscription_headers(subscription: Subscription) -> dict[str, str]:
         "content-disposition": 'attachment; filename="linkori"',
         "support-url": settings.SUB_SUPPORT_URL,
         "profile-web-page-url": settings.SUB_WEB_URL,
-        "x-hwid-active": "true",}
+        "x-hwid-active": "true",
+    }
+
+
+class SubscriptionOpenAppView(View):
+    http_method_names = ["get", "head"]
+
+    def get(self, request, sub_token: str, app_name: str):
+        app_entry = DEEPLINK_SCHEMES.get(app_name.lower())
+        if app_entry is None:
+            return HttpResponse(status=404)
+
+        if not Subscription.objects.filter(sub_token=sub_token).exists():
+            return HttpResponse(status=404)
+
+        app_label, template_uri = app_entry
+        sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}"
+        deeplink = template_uri.format(sub_url=sub_url)
+
+        response = render(
+            request,
+            "sub_gateway/open_app.html",
+            {
+                "app_label": app_label,
+                "deeplink": deeplink,
+                "sub_url": sub_url,
+            },
+            status=200,
+        )
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return response
 
 
 class SubscriptionGatewayView(View):
@@ -175,7 +211,7 @@ class SubscriptionGatewayView(View):
             .order_by("node__priority", "id")
         )
 
-        # 7. Собираем base64-подписку с учетом клиента (SIP022 / SIP002 для iOS)
+        # 7. Собираем base64-подписку
         payload = build_subscription_payload(
             subscription=subscription,
             inbounds=inbounds,

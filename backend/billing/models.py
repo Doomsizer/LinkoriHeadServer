@@ -15,9 +15,14 @@ def generate_ss2022_password() -> str:
     return ""
 
 
+def generate_payment_id(prefix: str = "inv") -> str:
+    return f"{prefix}_{secrets.token_hex(8)}"
+
+
 class Plan(models.Model):
     code = models.SlugField(max_length=64, unique=True, verbose_name="Код тарифа")
     name = models.CharField(max_length=128, verbose_name="Название")
+    description = models.TextField(blank=True, default="", verbose_name="Описание")
     duration_days = models.PositiveIntegerField(verbose_name="Срок (дней)")
     price_kopeks = models.PositiveBigIntegerField(verbose_name="Цена (копейки)")
     traffic_limit_gb = models.PositiveIntegerField(
@@ -195,3 +200,115 @@ class SubscriptionDevice(models.Model):
     def __str__(self) -> str:
         label = self.device_model or self.device_os or "Device"
         return f"{label} [{self.hwid}]"
+
+
+class Payment(models.Model):
+    class Method(models.TextChoices):
+        BALANCE = "balance", "Баланс"
+        EXTERNAL = "external", "Внешний платеж"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Ожидает оплаты"
+        PAID = "paid", "Оплачен"
+        FAILED = "failed", "Ошибка / Отменен"
+
+    payment_id = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        verbose_name="ID платежа",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="payments",
+        verbose_name="Пользователь",
+    )
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.PROTECT,
+        related_name="payments",
+        verbose_name="Тариф",
+    )
+    method = models.CharField(
+        max_length=16,
+        choices=Method.choices,
+        verbose_name="Способ оплаты",
+    )
+    provider = models.CharField(
+        max_length=32,
+        default="stub",
+        verbose_name="Провайдер",
+    )
+    external_id = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Внешний ID счета",
+    )
+    amount_kopeks = models.PositiveBigIntegerField(verbose_name="Сумма (копейки)")
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+        verbose_name="Статус",
+    )
+    payment_url = models.URLField(
+        max_length=512,
+        blank=True,
+        default="",
+        verbose_name="Ссылка на оплату",
+    )
+    subscription = models.ForeignKey(
+        Subscription,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="payments",
+        verbose_name="Выданная подписка",
+    )
+    metadata = models.JSONField(default=dict, blank=True, verbose_name="Метаданные")
+    paid_at = models.DateTimeField(null=True, blank=True, verbose_name="Оплачен")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создан")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлен")
+
+    class Meta:
+        verbose_name = "Платеж"
+        verbose_name_plural = "Платежи"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.payment_id} | {self.user} | {self.status}"
+
+
+class ReferralReward(models.Model):
+    referrer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="referral_rewards",
+        verbose_name="Пригласивший",
+    )
+    referred_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="generated_referral_rewards",
+        verbose_name="Реферал",
+    )
+    payment = models.OneToOneField(
+        Payment,
+        on_delete=models.CASCADE,
+        related_name="referral_reward",
+        verbose_name="Платеж",
+    )
+    amount_kopeks = models.PositiveBigIntegerField(verbose_name="Начислено (копейки)")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создано")
+
+    class Meta:
+        verbose_name = "Реферальный бонус"
+        verbose_name_plural = "Реферальные бонусы"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.referrer} +{self.amount_kopeks} коп. от {self.referred_user}"
