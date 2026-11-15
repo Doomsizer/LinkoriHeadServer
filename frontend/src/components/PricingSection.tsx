@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useState } from "react";
-import type { PublicPlan } from "../lib/api";
+import type { PublicPlan } from "@/lib/api";
 
 function formatRub(kopeks: number): string {
   const rub = kopeks / 100;
@@ -88,6 +88,47 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xl font-semibold text-white">{plan.name}</h3>
+                  {isPopular && (
+                    <span className="rounded-full bg-blue-600/20 px-2.5 py-1 text-xs font-medium text-blue-300">
+                      Популярный
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-4 flex items-baseline gap-2">
+                  <span className="text-4xl font-bold text-white">
+                    {formatRub(plan.price_kopeks)}
+                  </span>
+                  <span className="text-sm text-slate-400">/ {plan.duration_days} дн.</span>
+                </div>
+
+                <p className="mt-3 text-sm leading-relaxed text-slate-400">
+                  {plan.description || "Приватное прокси-подключение на базе современных протоколов."}
+                </p>
+
+                <ul className="mt-6 space-y-2.5 text-sm text-slate-300">
+                  <li>• Устройств: до {plan.max_devices}</li>
+                  <li>
+                    • Трафик:{" "}
+                    {plan.traffic_limit_gb ? `${plan.traffic_limit_gb} ГБ` : "Без ограничений"}
+                  </li>
+                  <li>• Протоколы: VLESS, Hysteria 2 (низкий пинг)</li>
+                  <li>• Поддержка через Telegram и Email</li>
+                </ul>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => openCheckout(plan)}
+                className="mt-8 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-500"
+              >
+                Оплатить / Купить
+              </button>
+            </div>
+          );
+        })}
+      </div>
 
       {selectedPlan && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
@@ -107,7 +148,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
                 onClick={closeCheckout}
                 className="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white"
               >
-                ✕
+                &times;
               </button>
             </div>
 
@@ -164,7 +205,9 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
                   disabled={loading}
                   className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-60"
                 >
-                  {loading ? "Проверка..." : `Перейти к оплате (${formatRub(selectedPlan.price_kopeks)})`}
+                  {loading
+                    ? "Проверка..."
+                    : `Перейти к оплате (${formatRub(selectedPlan.price_kopeks)})`}
                 </button>
                 <button
                   type="button"
@@ -181,45 +224,3 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
     </section>
   );
 }
-
-                  <h3 className="text-xl font-semibold text-white">{plan.name}</h3>
-                  {isPopular && (
-                    <span className="rounded-full bg-blue-600/20 px-2.5 py-1 text-xs font-medium text-blue-300">
-                      Популярный
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-4 flex items-baseline gap-2">
-                  <span className="text-4xl font-bold text-white">
-                    {formatRub(plan.price_kopeks)}
-                  </span>
-                  <span className="text-sm text-slate-400">/ {plan.duration_days} дн.</span>
-                </div>
-
-                <p className="mt-3 text-sm leading-relaxed text-slate-400">
-                  {plan.description || "Приватное прокси-подключение на базе современных протоколов."}
-                </p>
-
-                <ul className="mt-6 space-y-2.5 text-sm text-slate-300">
-                  <li>• Устройств: до {plan.max_devices}</li>
-                  <li>
-                    • Трафик:{" "}
-                    {plan.traffic_limit_gb ? `${plan.traffic_limit_gb} ГБ` : "Без ограничений"}
-                  </li>
-                  <li>• Протоколы: VLESS, Hysteria 2 (низкий пинг)</li>
-                  <li>• Поддержка через Telegram и Email</li>
-                </ul>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => openCheckout(plan)}
-                className="mt-8 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-500"
-              >
-                Оплатить / Купить
-              </button>
-            </div>
-          );
-        })}
-      </div>

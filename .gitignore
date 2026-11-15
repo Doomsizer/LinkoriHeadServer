@@ -4,27 +4,27 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
+/env/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
 .eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
 # Virtualenv
+.venv/
 venv/
 ENV/
-.env
 
 # Django
 *.log
@@ -32,7 +32,15 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 staticfiles/
+backend/staticfiles/
 media/
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+npm-debug.log*
 
 # IDE
 .idea/
@@ -40,13 +48,9 @@ media/
 *.swp
 *.swo
 
-# Sensetive info
+# Sensitive info
 .env
 backend/.env
+frontend/.env
 *.env.local
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-backend/staticfiles/
 tokens.txt
