@@ -38,7 +38,7 @@ services:
              python manage.py collectstatic --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 30"
     volumes:
-      - static_data:/app/staticfiles
+      - ./backend/staticfiles:/app/staticfiles
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -75,7 +75,18 @@ services:
       redis:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: ./frontend
+    container_name: linkori_frontend
+    restart: unless-stopped
+    environment:
+      INTERNAL_API_URL: http://django:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - django
+
 volumes:
   postgres_data:
   redis_data:
-  static_data:
