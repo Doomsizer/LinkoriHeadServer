@@ -19,9 +19,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # Сторонние пакеты
     "rest_framework",
-    # Приложения проекта
     "accounts.apps.AccountsConfig",
     "billing.apps.BillingConfig",
     "nodes.apps.NodesConfig",
@@ -100,7 +98,6 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Прокси за Nginx
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 CSRF_TRUSTED_ORIGINS = [
@@ -108,7 +105,6 @@ CSRF_TRUSTED_ORIGINS = [
     "https://www.linkori.org",
 ]
 
-# DRF
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -121,7 +117,6 @@ REST_FRAMEWORK = {
     ],
 }
 
-# Celery
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/1")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/2")
 CELERY_ACCEPT_CONTENT = ["json"]
@@ -135,14 +130,14 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# Настройки шлюза подписок
+# Шлюз подписок
 SUB_GATEWAY_HOST = os.getenv("SUB_GATEWAY_HOST", "sub.linkori.org").lower()
 SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori VPN")
 SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
 SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/linkori_support")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 
-# API-доступ и сервисные креды для проверочного стенда (probes)
+# Токены внутренних интеграций (стенд проверок и Telegram-бот)
 PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
 PROBE_XRAY_UUID = os.getenv("PROBE_XRAY_UUID", "")
-PROBE_SS_PASSWORD = os.getenv("PROBE_SS_PASSWORD", "")
+BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "")

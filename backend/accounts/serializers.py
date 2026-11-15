@@ -1,0 +1,12 @@
+from rest_framework import serializers
+
+
+class BotGetOrCreateUserSerializer(serializers.Serializer):
+    telegram_id = serializers.IntegerField(min_value=1)
+    telegram_username = serializers.CharField(
+        max_length=64,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    sync_panels = serializers.BooleanField(required=False, default=True)

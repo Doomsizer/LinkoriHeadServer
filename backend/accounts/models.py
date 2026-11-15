@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser
@@ -23,6 +24,11 @@ class User(AbstractUser):
         default="",
         db_index=True,
         verbose_name="Telegram username",
+    )
+    xray_uuid = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        verbose_name="Единый Xray UUID",
     )
     referral_code = models.CharField(
         max_length=32,

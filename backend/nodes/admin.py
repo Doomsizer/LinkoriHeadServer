@@ -27,7 +27,6 @@ class VpnNodeAdmin(admin.ModelAdmin):
         "country_code",
         "flag_emoji",
         "ip_address",
-        "auth_type",
         "inbounds_count",
         "is_enabled",
         "priority",
@@ -44,26 +43,16 @@ class VpnNodeAdmin(admin.ModelAdmin):
             {"fields": ("name", "country_code", "flag_emoji", "ip_address", "is_enabled", "priority")},
         ),
         (
-            "Подключение к 3x-ui",
+            "Подключение к 3x-ui (API Token)",
             {
                 "fields": (
                     "panel_url",
                     "panel_api_token",
                     "panel_verify_ssl",
-                    "panel_username",
-                    "panel_password",
                 ),
             },
         ),
     )
-
-    @admin.display(description="Авторизация")
-    def auth_type(self, obj):
-        if obj.panel_api_token:
-            return "API Token"
-        if obj.panel_username:
-            return "Login/Pass"
-        return "Не задана"
 
     @admin.display(description="Инбаундов")
     def inbounds_count(self, obj):
@@ -71,7 +60,7 @@ class VpnNodeAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
-        if obj.is_enabled and (obj.panel_api_token or (obj.panel_username and obj.panel_password)):
+        if obj.is_enabled and obj.panel_api_token.strip():
             try:
                 res = sync_node_inbounds(obj)
                 self.message_user(

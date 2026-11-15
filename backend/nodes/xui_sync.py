@@ -38,37 +38,66 @@ def _parse_json_field(value) -> dict:
     return {}
 
 
+def _build_auth_headers(node: VpnNode) -> dict[str, str]:
+    token = node.panel_api_token.strip()
+    if not token:
+        raise XuiSyncError(f"У ноды «{node.name}» не задан panel_api_token")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+
+def _extract_pin_sha256(tls: dict, tls_inner: dict, ext: dict) -> str:
+    raw = (
+        ext.get("pinnedPeerCertSha256")
+        or ext.get("pinSHA256")
+        or tls_inner.get("pinnedPeerCertSha256")
+        or tls.get("pinnedPeerCertSha256")
+        or ""
+    )
+    if isinstance(raw, list):
+        for item in raw:
+            cleaned = str(item).strip()
+            if cleaned:
+                return cleaned
+        return ""
+    return str(raw).strip()
+
+
+def _extract_hy2_obfs(stream: dict) -> tuple[str, str]:
+    hy2 = stream.get("hysteriaSettings") or {}
+    obfs = str(hy2.get("obfs") or "").strip()
+    obfs_password = str(hy2.get("obfsPassword") or "").strip()
+    if obfs:
+        return obfs, obfs_password
+
+    finalmask = stream.get("finalmask") or {}
+    udp_masks = finalmask.get("udp") or []
+    if isinstance(udp_masks, list):
+        for mask in udp_masks:
+            if not isinstance(mask, dict):
+                continue
+            if str(mask.get("type", "")).lower() == "salamander":
+                mask_settings = mask.get("settings") or {}
+                pwd = str(mask_settings.get("password") or "").strip()
+                if pwd:
+                    return "salamander", pwd
+    return "", ""
+
+
 def fetch_xui_inbounds(node: VpnNode, timeout: float = 10.0) -> list[dict]:
     base_url = _normalize_panel_base_url(node.panel_url)
     list_url = f"{base_url}/panel/api/inbounds/list"
+    headers = _build_auth_headers(node)
 
     try:
-        with httpx.Client(timeout=timeout, verify=node.panel_verify_ssl, follow_redirects=True) as client:
-            if node.panel_api_token.strip():
-                resp = client.get(
-                    list_url,
-                    headers={
-                        "Authorization": f"Bearer {node.panel_api_token.strip()}",
-                        "Accept": "application/json",
-                    },
-                )
-            elif node.panel_username.strip() and node.panel_password.strip():
-                login_resp = client.post(
-                    f"{base_url}/login",
-                    json={
-                        "username": node.panel_username.strip(),
-                        "password": node.panel_password,
-                    },
-                    headers={"Accept": "application/json"},
-                )
-                login_resp.raise_for_status()
-                login_data = login_resp.json()
-                if not login_data.get("success"):
-                    raise XuiSyncError(f"Ошибка входа в 3x-ui: {login_data.get('msg', 'unknown')}")
-                resp = client.get(list_url, headers={"Accept": "application/json"})
-            else:
-                raise XuiSyncError("Не задан API-токен или логин/пароль для панели 3x-ui")
-
+        with httpx.Client(
+            timeout=timeout,
+            verify=node.panel_verify_ssl,
+            follow_redirects=True,
+        ) as client:
+            resp = client.get(list_url, headers=headers)
             resp.raise_for_status()
             payload = resp.json()
     except httpx.HTTPError as exc:
@@ -110,7 +139,7 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
     if raw_port <= 0:
         return None
 
-    display_name = f"Premium {node.name}"
+    base_name = f"[Pr 👑] {node.name}"
     is_enabled = bool(raw_inbound.get("enable", True))
 
     # 1. VLESS Reality
@@ -140,14 +169,14 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
         return {
             "xui_inbound_id": int(xui_id),
             "protocol": NodeInbound.Protocol.VLESS_REALITY,
-            "display_name": display_name,
+            "display_name": base_name,
             "connect_host": str(node.ip_address),
             "connect_port": int(ext_port) if ext_port else raw_port,
             "extra_params": extra_params,
             "is_enabled": is_enabled,
         }
 
-    # 2. VLESS WS (через Cloudflare / домен)
+    # 2. VLESS WS (через Cloudflare, внешний порт всегда 443)
     if xui_protocol == "vless" and network == "ws":
         ws = stream.get("wsSettings") or {}
         ws_headers = ws.get("headers") or {}
@@ -159,18 +188,14 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
             ws.get("host") or ws_headers.get("Host") or ws_headers.get("host") or ""
         ).strip()
 
-        # Для WS хост подключения — домен (берем из sni, затем ws_host / externalProxy)
         connect_host = sni or ws_host or ext_dest or str(node.ip_address)
-        connect_port = int(ext_port) if ext_port else raw_port
         path = str(ws.get("path") or "/").strip() or "/"
 
         alpn_raw = tls.get("alpn") or ["http/1.1"]
         alpn = ",".join(str(x) for x in alpn_raw) if isinstance(alpn_raw, list) else str(alpn_raw)
 
         client_security = (
-            "tls"
-            if (security == "tls" or ext_force_tls == "tls" or connect_port == 443)
-            else security
+            "tls" if (security in ("tls", "none") or ext_force_tls == "tls") else security
         )
 
         extra_params = {
@@ -184,9 +209,9 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
         return {
             "xui_inbound_id": int(xui_id),
             "protocol": NodeInbound.Protocol.VLESS_WS,
-            "display_name": display_name,
+            "display_name": f"{base_name} CDN",
             "connect_host": connect_host,
-            "connect_port": connect_port,
+            "connect_port": 443,
             "extra_params": extra_params,
             "is_enabled": is_enabled,
         }
@@ -195,41 +220,25 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
     if xui_protocol in ("hysteria", "hysteria2"):
         tls = stream.get("tlsSettings") or {}
         tls_inner = tls.get("settings") or {}
-        hy2 = stream.get("hysteriaSettings") or {}
 
         alpn_raw = tls.get("alpn") or ["h3"]
         alpn = ",".join(str(x) for x in alpn_raw) if isinstance(alpn_raw, list) else str(alpn_raw)
         insecure = bool(tls_inner.get("allowInsecure") or tls.get("allowInsecure"))
+        pin_sha256 = _extract_pin_sha256(tls=tls, tls_inner=tls_inner, ext=ext)
+        obfs, obfs_password = _extract_hy2_obfs(stream)
 
         extra_params = {
             "sni": str(tls.get("serverName") or tls_inner.get("serverName") or "").strip(),
             "alpn": alpn,
             "insecure": insecure,
-            "obfs": str(hy2.get("obfs") or "").strip(),
-            "obfs_password": str(hy2.get("obfsPassword") or "").strip(),
+            "pin_sha256": pin_sha256,
+            "obfs": obfs,
+            "obfs_password": obfs_password,
         }
         return {
             "xui_inbound_id": int(xui_id),
             "protocol": NodeInbound.Protocol.HYSTERIA2,
-            "display_name": display_name,
-            "connect_host": str(node.ip_address),
-            "connect_port": int(ext_port) if ext_port else raw_port,
-            "extra_params": extra_params,
-            "is_enabled": is_enabled,
-        }
-
-    # 4. Shadowsocks 2022
-    if xui_protocol == "shadowsocks":
-        method = str(settings_data.get("method", "2022-blake3-aes-256-gcm")).strip()
-        server_psk = str(settings_data.get("password", "")).strip()
-        extra_params = {
-            "method": method,
-            "server_psk": server_psk,
-        }
-        return {
-            "xui_inbound_id": int(xui_id),
-            "protocol": NodeInbound.Protocol.SS,
-            "display_name": display_name,
+            "display_name": f"{base_name} (игровой 🎮)",
             "connect_host": str(node.ip_address),
             "connect_port": int(ext_port) if ext_port else raw_port,
             "extra_params": extra_params,
@@ -259,12 +268,10 @@ def sync_node_inbounds(node: VpnNode) -> SyncResult:
             NodeInbound.objects.create(node=node, xui_inbound_id=xui_id, **parsed)
             result.created += 1
         else:
-            # Сохраняем пользовательские probe-переопределения, если они были заданы в extra_params
             old_extra = existing.extra_params or {}
             new_extra = parsed["extra_params"]
-            for key in ("probe_xray_uuid", "probe_ss_password", "force_sip002", "force_sip022"):
-                if key in old_extra and key not in new_extra:
-                    new_extra[key] = old_extra[key]
+            if "probe_xray_uuid" in old_extra and "probe_xray_uuid" not in new_extra:
+                new_extra["probe_xray_uuid"] = old_extra["probe_xray_uuid"]
 
             existing.protocol = parsed["protocol"]
             existing.display_name = parsed["display_name"]
@@ -284,10 +291,139 @@ def sync_node_inbounds(node: VpnNode) -> SyncResult:
             )
             result.updated += 1
 
-    # Отключаем инбаунды, которых больше нет в 3x-ui на этой ноде
     stale_qs = NodeInbound.objects.filter(node=node, is_enabled=True)
     if seen_xui_ids:
         stale_qs = stale_qs.exclude(xui_inbound_id__in=seen_xui_ids)
     result.disabled = stale_qs.update(is_enabled=False)
 
     return result
+
+
+def ensure_user_on_panel(node: VpnNode, user, timeout: float = 10.0) -> dict:
+    """
+    Проверяет наличие пользователя (по единому xray_uuid или email) во всех
+    поддерживаемых инбаундах панели 3x-ui и добавляет там, где его еще нет.
+    """
+    base_url = _normalize_panel_base_url(node.panel_url)
+    headers = _build_auth_headers(node)
+    raw_inbounds = fetch_xui_inbounds(node, timeout=timeout)
+
+    user_uuid = str(user.xray_uuid)
+    tg_id_str = str(user.telegram_id)
+    added = 0
+    existing = 0
+
+    with httpx.Client(
+        timeout=timeout,
+        verify=node.panel_verify_ssl,
+        follow_redirects=True,
+    ) as client:
+        for raw in raw_inbounds:
+            if not raw.get("enable", True):
+                continue
+
+            xui_id = raw.get("id")
+            xui_protocol = str(raw.get("protocol", "")).lower().strip()
+            stream = _parse_json_field(raw.get("streamSettings"))
+            network = str(stream.get("network", "tcp")).lower().strip()
+            security = str(stream.get("security", "none")).lower().strip()
+
+            if xui_protocol == "vless" and (security == "reality" or network == "ws"):
+                is_hy2 = False
+                flow = "xtls-rprx-vision" if security == "reality" else ""
+            elif xui_protocol in ("hysteria", "hysteria2"):
+                is_hy2 = True
+                flow = ""
+            else:
+                continue
+
+            settings_data = _parse_json_field(raw.get("settings"))
+            clients = settings_data.get("clients") or []
+            client_email = f"tg_{user.telegram_id}_{xui_id}"
+
+            already_present = any(
+                isinstance(c, dict)
+                and (
+                    str(c.get("id", "")).lower() == user_uuid.lower()
+                    or str(c.get("auth", "")).lower() == user_uuid.lower()
+                    or str(c.get("email", "")) == client_email
+                )
+                for c in clients
+            )
+            if already_present:
+                existing += 1
+                continue
+
+            if is_hy2:
+                client_payload = {
+                    "auth": user_uuid,
+                    "email": client_email,
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "tgId": tg_id_str,
+                    "subId": "",
+                }
+            else:
+                client_payload = {
+                    "id": user_uuid,
+                    "flow": flow,
+                    "email": client_email,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "tgId": tg_id_str,
+                    "subId": "",
+                }
+
+            add_url = f"{base_url}/panel/api/inbounds/addClient"
+            try:
+                resp = client.post(
+                    add_url,
+                    headers=headers,
+                    json={
+                        "id": int(xui_id),
+                        "settings": json.dumps({"clients": [client_payload]}),
+                    },
+                )
+                resp.raise_for_status()
+                resp_data = resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise XuiSyncError(
+                    f"Ошибка addClient на ноде «{node.name}» (инбаунд {xui_id}): {exc}"
+                ) from exc
+
+            if not resp_data.get("success"):
+                raise XuiSyncError(
+                    f"3x-ui отклонила addClient на «{node.name}» (инбаунд {xui_id}): "
+                    f"{resp_data.get('msg', 'unknown')}"
+                )
+            added += 1
+
+    return {"added": added, "existing": existing}
+
+
+def ensure_user_on_all_panels(user) -> dict:
+    nodes = VpnNode.objects.filter(is_enabled=True).order_by("priority", "id")
+    total_added = 0
+    total_existing = 0
+    errors: list[dict] = []
+
+    for node in nodes:
+        if not node.panel_api_token.strip():
+            errors.append({"node_id": node.id, "node_name": node.name, "error": "missing_api_token"})
+            continue
+        try:
+            res = ensure_user_on_panel(node, user)
+            total_added += res["added"]
+            total_existing += res["existing"]
+        except XuiSyncError as exc:
+            errors.append({"node_id": node.id, "node_name": node.name, "error": str(exc)})
+
+    return {
+        "nodes_total": nodes.count(),
+        "clients_added": total_added,
+        "clients_existing": total_existing,
+        "errors": errors,
+    }

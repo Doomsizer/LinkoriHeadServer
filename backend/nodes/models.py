@@ -18,22 +18,8 @@ class VpnNode(models.Model):
     )
     panel_api_token = models.CharField(
         max_length=512,
-        blank=True,
-        default="",
         verbose_name="API-токен панели 3x-ui",
         help_text="Создается в 3x-ui: Settings -> Security -> API Token (Bearer)",
-    )
-    panel_username = models.CharField(
-        max_length=128,
-        blank=True,
-        default="",
-        verbose_name="Логин панели (legacy)",
-    )
-    panel_password = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-        verbose_name="Пароль панели (legacy)",
     )
     panel_verify_ssl = models.BooleanField(
         default=False,
@@ -60,12 +46,8 @@ class VpnNode(models.Model):
 
     def clean(self):
         super().clean()
-        has_token = bool(self.panel_api_token.strip())
-        has_legacy_creds = bool(self.panel_username.strip() and self.panel_password.strip())
-        if not has_token and not has_legacy_creds:
-            raise ValidationError(
-                "Укажите API-токен панели 3x-ui (рекомендуется) или логин и пароль."
-            )
+        if not self.panel_api_token.strip():
+            raise ValidationError("Укажите API-токен панели 3x-ui.")
 
     def __str__(self) -> str:
         prefix = f"{self.flag_emoji} " if self.flag_emoji else ""
@@ -77,7 +59,6 @@ class NodeInbound(models.Model):
         VLESS_REALITY = "vless_reality", "VLESS Reality"
         VLESS_WS = "vless_ws", "VLESS WS (Cloudflare)"
         HYSTERIA2 = "hysteria2", "Hysteria 2"
-        SS = "ss", "Shadowsocks 2022"
 
     class HealthStatus(models.TextChoices):
         ONLINE = "online", "Online"

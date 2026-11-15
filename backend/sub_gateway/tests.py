@@ -33,27 +33,23 @@ class SubGatewayTests(TestCase):
             expires_at=timezone.now() + timedelta(days=30),
         )
         self.node = VpnNode.objects.create(
-            name="NL-01",
-            country_code="NL",
-            flag_emoji="🇳🇱",
+            name="Finland",
+            country_code="FI",
+            flag_emoji="🇫🇮",
             ip_address="198.51.100.10",
             panel_url="https://198.51.100.10:2053",
-            panel_username="admin",
-            panel_password="secret",
+            panel_api_token="test-token",
             is_enabled=True,
             priority=10,
         )
         self.inbound_online = NodeInbound.objects.create(
             node=self.node,
             xui_inbound_id=1,
-            protocol=NodeInbound.Protocol.SS,
-            display_name="NL Shadowsocks",
-            connect_host="nl1.linkori.org",
-            connect_port=8388,
-            extra_params={
-                "method": "2022-blake3-aes-256-gcm",
-                "server_psk": "c2VydmVyX3Bza18zMl9ieXRlc19rZXlfMTIzNDU2Nzg=",
-            },
+            protocol=NodeInbound.Protocol.HYSTERIA2,
+            display_name="[Pr 👑] Finland (игровой 🎮)",
+            connect_host="198.51.100.10",
+            connect_port=8443,
+            extra_params={"pin_sha256": "ab:cd:ef", "alpn": "h3"},
             is_enabled=True,
             health_status=NodeInbound.HealthStatus.ONLINE,
         )
@@ -61,8 +57,8 @@ class SubGatewayTests(TestCase):
             node=self.node,
             xui_inbound_id=2,
             protocol=NodeInbound.Protocol.VLESS_REALITY,
-            display_name="NL Offline",
-            connect_host="nl1.linkori.org",
+            display_name="[Pr 👑] Finland",
+            connect_host="198.51.100.10",
             connect_port=443,
             is_enabled=True,
             health_status=NodeInbound.HealthStatus.OFFLINE,
@@ -89,42 +85,34 @@ class SubGatewayTests(TestCase):
         self.assertEqual(res["x-hwid-active"], "true")
         self.assertEqual(res["x-hwid-not-supported"], "true")
 
-    def test_device_limit_and_ios_sip002_vs_sip022(self):
-        # 1-е устройство (Android -> SIP022)
-        res_android = self.client.get(
+    def test_device_limit_and_hysteria2_pin_sha256(self):
+        res1 = self.client.get(
             f"/{self.sub.sub_token}",
             HTTP_HOST="sub.linkori.org",
             HTTP_X_HWID="android-device-001",
-            HTTP_X_DEVICE_OS="Android",
             HTTP_ACCEPT="*/*",
         )
-        self.assertEqual(res_android.status_code, 200)
-        decoded_android = base64.b64decode(res_android.content).decode("utf-8")
-        self.assertIn("ss://2022-blake3-aes-256-gcm:", decoded_android)
-        self.assertNotIn("NL Offline", decoded_android)
+        self.assertEqual(res1.status_code, 200)
+        decoded = base64.b64decode(res1.content).decode("utf-8")
+        self.assertIn("hysteria2://", decoded)
+        self.assertIn("pinSHA256=ab%3Acd%3Aef", decoded)
+        self.assertNotIn(":443?", decoded)
 
-        # 2-е устройство (iOS -> SIP002 base64)
-        res_ios = self.client.get(
+        res2 = self.client.get(
             f"/{self.sub.sub_token}",
             HTTP_HOST="sub.linkori.org",
             HTTP_X_HWID="ios-device-002",
-            HTTP_X_DEVICE_OS="iOS",
-            HTTP_USER_AGENT="Shadowrocket/2.2",
             HTTP_ACCEPT="*/*",
         )
-        self.assertEqual(res_ios.status_code, 200)
-        decoded_ios = base64.b64decode(res_ios.content).decode("utf-8")
-        self.assertTrue(decoded_ios.startswith("ss://"))
-        self.assertNotIn("2022-blake3-aes-256-gcm:", decoded_ios)
+        self.assertEqual(res2.status_code, 200)
 
-        # 3-е устройство -> превышение лимита (max_devices=2)
-        res_third = self.client.get(
+        res3 = self.client.get(
             f"/{self.sub.sub_token}",
             HTTP_HOST="sub.linkori.org",
             HTTP_X_HWID="windows-device-003",
             HTTP_ACCEPT="*/*",
         )
-        self.assertEqual(res_third.status_code, 403)
-        self.assertEqual(res_third["x-hwid-active"], "true")
-        self.assertEqual(res_third["x-hwid-max-devices-reached"], "true")
-        self.assertEqual(res_third["x-hwid-limit"], "true")
+        self.assertEqual(res3.status_code, 403)
+        self.assertEqual(res3["x-hwid-active"], "true")
+        self.assertEqual(res3["x-hwid-max-devices-reached"], "true")
+        self.assertEqual(res3["x-hwid-limit"], "true")

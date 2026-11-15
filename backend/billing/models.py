@@ -1,5 +1,3 @@
-import base64
-import os
 import secrets
 import uuid
 
@@ -10,11 +8,6 @@ from django.utils import timezone
 
 def generate_sub_token() -> str:
     return secrets.token_urlsafe(24)
-
-
-def generate_ss2022_password() -> str:
-    # 32 байта в base64 подходят для 2022-blake3-aes-256-gcm и 2022-blake3-chacha20-poly1305
-    return base64.b64encode(os.urandom(32)).decode("ascii")
 
 
 class Plan(models.Model):
@@ -76,14 +69,10 @@ class Subscription(models.Model):
         verbose_name="Токен подписки",
     )
     xray_uuid = models.UUIDField(
-        default=uuid.uuid4,
-        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
         verbose_name="Xray UUID",
-    )
-    ss_password = models.CharField(
-        max_length=128,
-        default=generate_ss2022_password,
-        verbose_name="Пароль Shadowsocks 2022",
     )
     status = models.CharField(
         max_length=16,
@@ -115,6 +104,14 @@ class Subscription(models.Model):
         verbose_name = "Подписка"
         verbose_name_plural = "Подписки"
         ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.xray_uuid:
+            if self.user_id and getattr(self.user, "xray_uuid", None):
+                self.xray_uuid = self.user.xray_uuid
+            else:
+                self.xray_uuid = uuid.uuid4()
+        super().save(*args, **kwargs)
 
     def is_valid_now(self, now=None) -> bool:
         now = now or timezone.now()

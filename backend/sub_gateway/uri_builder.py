@@ -5,45 +5,6 @@ from urllib.parse import quote, urlencode
 from billing.models import Subscription
 from nodes.models import NodeInbound
 
-IOS_USER_AGENT_HINTS = (
-    "shadowrocket",
-    "streisand",
-    "v2box",
-    "foxray",
-    "npv",
-    "loon",
-    "quantumult",
-    "potatso",
-    "ios",
-    "iphone",
-    "ipad",
-)
-
-
-def is_ios_client(device_os: str = "", user_agent: str = "") -> bool:
-    if device_os and device_os.strip().lower() == "ios":
-        return True
-    ua = (user_agent or "").lower()
-    return any(hint in ua for hint in IOS_USER_AGENT_HINTS)
-
-
-def should_use_sip002_for_ss(
-    method: str,
-    device_os: str = "",
-    user_agent: str = "",
-    extra_params: dict | None = None,
-) -> bool:
-    params = extra_params or {}
-    if params.get("force_sip002") is True:
-        return True
-    if params.get("force_sip022") is True:
-        return False
-    # Классические AEAD-шифры всегда кодируются по SIP002 (base64)
-    if not method.startswith("2022-"):
-        return True
-    # Для iOS-клиентов (Shadowrocket, V2Box, Streisand и т.д.) отдаем SIP002
-    return is_ios_client(device_os=device_os, user_agent=user_agent)
-
 
 def _format_host(host: str) -> str:
     if ":" in host and not host.startswith("["):
@@ -115,7 +76,7 @@ def build_hysteria2_uri(subscription: Subscription, inbound: NodeInbound) -> str
 
     query = _clean_query(
         {
-            "sni": extra.get("sni", inbound.connect_host),
+            "sni": extra.get("sni", ""),
             "alpn": extra.get("alpn", ""),
             "insecure": insecure,
             "obfs": extra.get("obfs", ""),
@@ -127,39 +88,6 @@ def build_hysteria2_uri(subscription: Subscription, inbound: NodeInbound) -> str
     remark = _build_remark(inbound)
     qs = f"?{query}" if query else ""
     return f"hysteria2://{auth}@{host}:{inbound.connect_port}/{qs}#{remark}"
-
-
-def build_ss_uri(
-    subscription: Subscription,
-    inbound: NodeInbound,
-    device_os: str = "",
-    user_agent: str = "",
-) -> str:
-    extra = inbound.extra_params or {}
-    host = _format_host(inbound.connect_host)
-    method = extra.get("method", "2022-blake3-aes-256-gcm")
-    server_psk = extra.get("server_psk", "")
-
-    user_psk = subscription.ss_password
-    password = f"{server_psk}:{user_psk}" if server_psk else user_psk
-
-    use_sip002 = should_use_sip002_for_ss(
-        method=method,
-        device_os=device_os,
-        user_agent=user_agent,
-        extra_params=extra,
-    )
-
-    if use_sip002:
-        raw_creds = f"{method}:{password}".encode("utf-8")
-        userinfo = base64.urlsafe_b64encode(raw_creds).decode("ascii").rstrip("=")
-    else:
-        userinfo = f"{quote(method, safe='')}:{quote(password, safe='')}"
-
-    plugin = extra.get("plugin", "")
-    qs = f"/?{urlencode({'plugin': plugin})}" if plugin else ""
-    remark = _build_remark(inbound)
-    return f"ss://{userinfo}@{host}:{inbound.connect_port}{qs}#{remark}"
 
 
 def build_inbound_uri(
@@ -175,13 +103,6 @@ def build_inbound_uri(
         return build_vless_ws_uri(subscription, inbound)
     if protocol == NodeInbound.Protocol.HYSTERIA2:
         return build_hysteria2_uri(subscription, inbound)
-    if protocol == NodeInbound.Protocol.SS:
-        return build_ss_uri(
-            subscription,
-            inbound,
-            device_os=device_os,
-            user_agent=user_agent,
-        )
     raise ValueError(f"Неподдерживаемый протокол инбаунда: {protocol}")
 
 

@@ -47,33 +47,18 @@ class ProbeNodesListView(APIView):
                 ]
             )
 
-        device_os = request.query_params.get("device_os", "").strip()
-        user_agent = request.query_params.get("user_agent", "").strip()
-
         nodes_payload = []
         skipped = []
 
         for inbound in queryset:
             extra = inbound.extra_params or {}
             xray_uuid = str(extra.get("probe_xray_uuid") or settings.PROBE_XRAY_UUID or "").strip()
-            ss_password = str(
-                extra.get("probe_ss_password") or settings.PROBE_SS_PASSWORD or ""
-            ).strip()
-
-            if inbound.protocol == NodeInbound.Protocol.SS and not ss_password:
-                skipped.append({"inbound_id": inbound.id, "reason": "missing_probe_ss_password"})
-                continue
-            if inbound.protocol != NodeInbound.Protocol.SS and not xray_uuid:
+            if not xray_uuid:
                 skipped.append({"inbound_id": inbound.id, "reason": "missing_probe_xray_uuid"})
                 continue
 
-            probe_sub = SimpleNamespace(xray_uuid=xray_uuid, ss_password=ss_password)
-            uri = build_inbound_uri(
-                subscription=probe_sub,
-                inbound=inbound,
-                device_os=device_os,
-                user_agent=user_agent,
-            )
+            probe_sub = SimpleNamespace(xray_uuid=xray_uuid)
+            uri = build_inbound_uri(subscription=probe_sub, inbound=inbound)
 
             nodes_payload.append(
                 {
@@ -215,7 +200,6 @@ class ProbeReportView(APIView):
                 changed = True
                 snapshot_id = snapshot.id
 
-            # Опциональное обновление статусов наших инбаундов, если стенд их прислал
             updated_own_count = 0
             for item in own_results:
                 new_status = (
