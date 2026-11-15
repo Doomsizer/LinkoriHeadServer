@@ -1,5 +1,5 @@
 LEGAL_UPDATED_AT = "15 ноября 2026 г."
-SUPPORT_TELEGRAM = "@linkori_support"
+SUPPORT_TELEGRAM = "@Linkorisupport"
 SUPPORT_EMAIL = "support@linkori.org"
 PROJECT_NAME = "Linkori"
 PROJECT_DOMAIN = "linkori.org"
