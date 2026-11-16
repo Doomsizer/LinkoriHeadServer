@@ -2,11 +2,49 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Фон */
+  --bg: #1b1238;
+  --bg-glow-violet: rgba(150, 90, 255, 0.28);
+  --bg-glow-blue: rgba(122, 177, 235, 0.16);
+
+  /* Поверхности */
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-hover: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.09);
+  --card-front: linear-gradient(150deg, #36246f 0%, #282b72 100%);
+  --card-back: linear-gradient(150deg, #213a78 0%, #1d2a66 100%);
+
+  /* Текст */
+  --text: #f1eeff;
+  --text-muted: #a8a2d4;
+
+  /* Акценты */
+  --accent: #7ae9eb;
+  --accent-2: #7ab1eb;
+  --accent-soft: rgba(122, 233, 235, 0.14);
+  --yellow: #ffc233;
+  --green: #2fbf8a;
+  --green-light: #6ff0bd;
+  --red: #ec5f49;
+  --red-light: #ff9a8a;
+
+  --radius-lg: 22px;
+  --radius-md: 14px;
+  --shadow-card: 0 18px 40px -12px rgba(8, 4, 30, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 html {
   scroll-behavior: smooth;
 }
 
 body {
-  background-color: #070b14;
-  color: #e6ebf5;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(680px 440px at 14% 0%, var(--bg-glow-violet), transparent 72%),
+    radial-gradient(620px 420px at 88% 8%, var(--bg-glow-blue), transparent 72%);
+  background-attachment: fixed;
+  color: var(--text);
 }
+

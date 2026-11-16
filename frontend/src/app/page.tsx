@@ -7,42 +7,34 @@ export const dynamic = "force-dynamic";
 const FEATURES = [
   {
     title: "Шифрование в открытых сетях",
-    text: "Надежная защита передаваемых данных при подключении через публичный Wi-Fi в кафе, отелях, аэропортах и коворкингах.",
+    text: "Надежная защита передаваемых данных в публичных Wi-Fi сетях кафе, отелей и аэропортов.",
   },
   {
-    title: "Низкая задержка и стабильность",
-    text: "Выделенные каналы и оптимальные сетевые маршруты для онлайн-игр, видеосвязи, облачной разработки и стриминга.",
+    title: "Низкий пинг и стабильность",
+    text: "Выделенные каналы и прямые маршруты для онлайн-игр, созвонов и повседневных задач.",
   },
   {
-    title: "Современные транспортные протоколы",
-    text: "Поддержка VLESS, TLS/CDN-маршрутизации и Hysteria 2 для высокой скорости на мобильных и настольных устройствах.",
+    title: "Современные протоколы",
+    text: "VLESS, TLS/CDN-маршрутизация и Hysteria 2 для высокой скорости на любом типе сети.",
   },
   {
-    title: "Единая конфигурация на 5 устройств",
-    text: "Подключайте смартфон, ноутбук, планшет и домашний ПК по одной персональной ссылке подписки.",
+    title: "До 10 устройств одновременно",
+    text: "Подключайте смартфоны, ноутбуки и домашние ПК по одной персональной ссылке.",
   },
 ];
 
 const FAQS = [
   {
-    q: "Что именно предоставляет сервис Linkori?",
-    a: "Linkori предоставляет технические услуги доступа к выделенной приватной прокси-инфраструктуре для защищенной передачи данных, повышения стабильности маршрутизации и безопасности в публичных сетях.",
+    q: "Как подключиться после оплаты?",
+    a: "Выберите тариф на сайте или в боте @linkoribot, укажите email и оплатите заказ. Сразу после оплаты откроется персональная ссылка подписки — вставьте ее в приложение, и соединение заработает за минуту.",
   },
   {
-    q: "Как оформить доступ — на сайте или через Telegram?",
-    a: "Оформить доступ можно прямо на сайте в разделе тарифов, а также через официального Telegram-бота @linkoribot.",
-  },
-  {
-    q: "На каких устройствах можно использовать подключение?",
-    a: "Сервис работает на iOS, Android, Windows, macOS и Linux через популярные клиентские приложения (Happ, v2RayTun, Hiddify).",
-  },
-  {
-    q: "Кто несет ответственность за действия при использовании прокси?",
-    a: "Сервис предоставляет только техническую инфраструктуру связи. Ответственность за характер использования подключения и соблюдение законодательства лежит полностью на пользователе.",
+    q: "На каких устройствах работает подключение?",
+    a: "На iOS, Android, Windows, macOS и Linux через приложения Happ, v2RayTun или Hiddify. Одна подписка поддерживает до 10 устройств.",
   },
   {
     q: "Как связаться со службой поддержки?",
-    a: "Вы можете написать напрямую оператору поддержки в Telegram @Linkorisupport или на почту support@linkori.org.",
+    a: "Напишите оператору поддержки в Telegram @Linkorisupport или на почту support@linkori.org.",
   },
 ];
 
@@ -51,58 +43,78 @@ export default async function HomePage() {
 
   return (
     <>
-      <section className="relative overflow-hidden border-b border-border/70">
-        <div className="mx-auto max-w-6xl px-4 py-20 sm:py-24">
-          <div className="max-w-3xl">
-            <span className="inline-flex items-center rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-300">
-              Приватная сетевая инфраструктура нового поколения
+      <section className="border-b border-[var(--border)]">
+        <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-16 lg:grid-cols-[1fr_320px] lg:py-20">
+          <div>
+            <span className="inline-flex items-center rounded-full border border-[var(--accent)]/35 bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">
+              Сетевая инфраструктура нового поколения
             </span>
-            <h1 className="mt-5 text-4xl font-extrabold tracking-tight text-white sm:text-5xl">
+            <h1 className="mt-5 text-4xl font-extrabold tracking-tight text-[var(--text)] sm:text-5xl">
               Приватный прокси-сервис для защищенного и быстрого интернета
             </h1>
-            <p className="mt-5 text-base leading-relaxed text-slate-300 sm:text-lg">
-              Стабильное зашифрованное соединение для повседневной работы, онлайн-игр и защиты
-              трафика в публичных Wi-Fi сетях. Подключение за 1 минуту на iOS, Android, Windows и
-              macOS.
+            <p className="mt-5 max-w-2xl text-base leading-relaxed text-[var(--text-muted)] sm:text-lg">
+              Шифрование соединения, низкий пинг и стабильный канал на iOS, Android, Windows и
+              macOS. До 10 устройств по одной ссылке.
             </p>
-            <div className="mt-8 flex flex-wrap items-center gap-4">
+            <div className="mt-8 flex flex-wrap items-center gap-3.5">
               <Link
                 href="/#pricing"
-                className="rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-semibold text-white transition hover:bg-blue-500"
+                className="rounded-[14px] bg-[var(--accent)] px-6 py-3.5 text-sm font-bold text-[#150d2e] transition hover:bg-[var(--accent-2)]"
               >
-                Выбрать тариф и подключиться
+                Выбрать тариф
               </Link>
               <a
                 href="https://t.me/linkoribot"
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-6 py-3.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20"
+                className="rounded-[14px] border border-[var(--accent)]/35 bg-[var(--accent-soft)] px-6 py-3.5 text-sm font-semibold text-[var(--accent)] transition hover:bg-[var(--accent)]/20"
               >
-                Открыть бот @linkoribot
+                Открыть бота @linkoribot
               </a>
               <a
                 href="https://t.me/Linkorisupport"
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-xl border border-border bg-surface px-6 py-3.5 text-sm font-medium text-slate-200 transition hover:border-slate-500"
+                className="rounded-[14px] border border-[var(--border)] bg-[var(--surface)] px-6 py-3.5 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--surface-hover)]"
               >
-                Написать в поддержку
+                Поддержка
               </a>
+            </div>
+          </div>
+
+          <div className="relative mx-auto w-full max-w-[280px] lg:max-w-[320px]">
+            <div
+              className="absolute -inset-4 rounded-[30px] opacity-80 blur-2xl"
+              style={{
+                background:
+                  "radial-gradient(circle, rgba(150,90,255,0.45) 0%, rgba(122,233,235,0.25) 60%, transparent 100%)",
+              }}
+            />
+            <div
+              className="relative overflow-hidden rounded-[22px] border border-white/15 bg-white/95 p-2"
+              style={{ boxShadow: "var(--shadow-card)" }}
+            >
+              <img
+                src="/linkori-mascot.jpg"
+                alt="Linkori"
+                className="h-auto w-full rounded-[16px] object-cover"
+              />
             </div>
           </div>
         </div>
       </section>
 
-      <section id="features" className="mx-auto max-w-6xl px-4 py-16">
-        <h2 className="text-2xl font-bold text-white sm:text-3xl">Почему выбирают Linkori</h2>
-        <div className="mt-8 grid gap-6 sm:grid-cols-2">
+      <section id="features" className="mx-auto max-w-6xl px-4 py-14">
+        <h2 className="text-2xl font-bold text-[var(--text)] sm:text-3xl">Преимущества</h2>
+        <div className="mt-8 grid gap-5 sm:grid-cols-2">
           {FEATURES.map((item) => (
             <div
               key={item.title}
-              className="rounded-2xl border border-border bg-surface/75 p-6"
+              className="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] p-6 transition hover:bg-[var(--surface-hover)]"
+              style={{ boxShadow: "var(--shadow-card)" }}
             >
-              <h3 className="text-lg font-semibold text-white">{item.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-400">{item.text}</p>
+              <h3 className="text-lg font-semibold text-[var(--text)]">{item.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-[var(--text-muted)]">{item.text}</p>
             </div>
           ))}
         </div>
@@ -110,15 +122,18 @@ export default async function HomePage() {
 
       <PricingSection plans={plans} />
 
-      <section id="faq" className="mx-auto max-w-4xl px-4 py-16">
-        <h2 className="text-center text-2xl font-bold text-white sm:text-3xl">
+      <section id="faq" className="mx-auto max-w-4xl px-4 py-14">
+        <h2 className="text-center text-2xl font-bold text-[var(--text)] sm:text-3xl">
           Частые вопросы
         </h2>
         <div className="mt-8 space-y-4">
           {FAQS.map((item) => (
-            <div key={item.q} className="rounded-2xl border border-border bg-surface/70 p-5">
-              <h3 className="text-base font-semibold text-white">{item.q}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-400">{item.a}</p>
+            <div
+              key={item.q}
+              className="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] p-5"
+            >
+              <h3 className="text-base font-semibold text-[var(--text)]">{item.q}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-[var(--text-muted)]">{item.a}</p>
             </div>
           ))}
         </div>

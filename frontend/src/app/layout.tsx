@@ -6,13 +6,18 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Linkori — Приватный прокси-сервис для защищенного подключения",
   description:
-    "Высокоскоростные приватные прокси-узлы для шифрования соединений, защиты в публичных Wi-Fi сетях и стабильной маршрутизации.",
+    "Высокоскоростные прокси-узлы для шифрования соединений, защиты в публичных Wi-Fi сетях и стабильной маршрутизации.",
+  icons: {
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/icon.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ru">
-      <body className="flex min-h-screen flex-col bg-bg text-slate-100 antialiased">
+      <body className="flex min-h-screen flex-col antialiased">
         <Navbar />
         <main className="flex-1">{children}</main>
         <Footer />
@@ -20,3 +25,4 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   );
 }
+
