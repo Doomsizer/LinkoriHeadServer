@@ -49,6 +49,10 @@ class BotProfileView(APIView):
                 "telegram_username": user.telegram_username,
                 "referral_code": user.referral_code,
                 "balance_kopeks": user.balance_kopeks,
+                "is_legal_accepted": user.is_legal_accepted,
+                "legal_accepted_at": (
+                    format_iso_utc(user.legal_accepted_at) if user.legal_accepted_at else None
+                ),
                 "referrals_count": referrals_count,
                 "referral_bonus_kopeks": bonus_total,
                 "active_subscription": serialize_subscription(active_sub) if active_sub else None,

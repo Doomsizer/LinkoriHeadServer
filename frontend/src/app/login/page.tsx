@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { hasLocalLegalConsent } from "@/lib/consent";
 
 export default function LoginPage() {
   const [clicked, setClicked] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
+
+  useEffect(() => {
+    setLegalAccepted(hasLocalLegalConsent());
+  }, []);
 
   return (
     <section className="mx-auto flex max-w-6xl items-center justify-center px-4 py-20">
@@ -39,8 +45,10 @@ export default function LoginPage() {
 
         {clicked && (
           <div className="mt-4 rounded-[14px] border border-[#f472b6]/35 bg-[#23123c] p-3.5 text-xs leading-relaxed text-[#fbcfe8]">
-            Веб-авторизация через Telegram находится на этапе подключения. Сейчас войти в профиль и
-            управлять подключением можно через официального бота{" "}
+            Веб-авторизация через Telegram находится на этапе подключения.
+            {legalAccepted &&
+              " Ваше согласие с условиями сохранено в браузере и применится автоматически при входе."}
+            {" "}Сейчас управлять подключением можно через{" "}
             <a
               href="https://t.me/linkoribot"
               target="_blank"

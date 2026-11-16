@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ConsentGate } from "@/components/ConsentGate";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import "./globals.css";
@@ -21,8 +22,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Navbar />
         <main className="flex-1">{children}</main>
         <Footer />
+        <ConsentGate />
       </body>
     </html>
   );
 }
-

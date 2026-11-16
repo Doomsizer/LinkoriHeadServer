@@ -17,4 +17,10 @@ class BotGetOrCreateUserSerializer(serializers.Serializer):
         allow_null=True,
         default="",
     )
+    is_legal_accepted = serializers.BooleanField(required=False, default=False)
     sync_panels = serializers.BooleanField(required=False, default=True)
+
+
+class BotAcceptLegalSerializer(serializers.Serializer):
+    telegram_id = serializers.IntegerField(min_value=1)
+    accepted = serializers.BooleanField(required=False, default=True)

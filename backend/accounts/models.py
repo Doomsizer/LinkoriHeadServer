@@ -48,6 +48,16 @@ class User(AbstractUser):
         default=0,
         verbose_name="Баланс (копейки)",
     )
+    is_legal_accepted = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Приняты документы и cookies",
+    )
+    legal_accepted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Дата принятия документов",
+    )
 
     class Meta:
         verbose_name = "Пользователь"

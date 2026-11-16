@@ -31,6 +31,10 @@ class InsufficientBalanceError(BillingError):
     status_code = 400
 
 
+class LegalConsentRequiredError(BillingError):
+    status_code = 403
+
+
 def format_iso_utc(dt) -> str:
     if dt is None:
         return ""
@@ -177,6 +181,11 @@ def pay_with_balance(telegram_id: int, plan_id: int) -> tuple[Payment, Subscript
     if user is None:
         raise BillingNotFoundError("Пользователь не найден")
 
+    if not user.is_legal_accepted:
+        raise LegalConsentRequiredError(
+            "Перед покупкой необходимо принять Политику конфиденциальности и Пользовательское соглашение."
+        )
+
     if user.balance_kopeks < plan.price_kopeks:
         raise InsufficientBalanceError("Недостаточно средств на балансе")
 
@@ -215,6 +224,11 @@ def create_external_payment(telegram_id: int, plan_id: int, email: str = "") -> 
     user = User.objects.filter(telegram_id=telegram_id).first()
     if user is None:
         raise BillingNotFoundError("Пользователь не найден")
+
+    if not user.is_legal_accepted:
+        raise LegalConsentRequiredError(
+            "Перед покупкой необходимо принять Политику конфиденциальности и Пользовательское соглашение."
+        )
 
     pay_id = generate_payment_id("inv")
     provider = settings.PAYMENT_PROVIDER
