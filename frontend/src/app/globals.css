@@ -3,36 +3,21 @@
 @tailwind utilities;
 
 :root {
-  /* Фон */
-  --bg: #1b1238;
-  --bg-glow-violet: rgba(150, 90, 255, 0.28);
-  --bg-glow-blue: rgba(122, 177, 235, 0.16);
+  --bg-top: #120b28;
+  --bg-main: #1b1238;
+  --bg-card: #160e31;
+  --bg-card-featured: linear-gradient(155deg, #271657 0%, #161038 100%);
+  --bg-modal: #130b2c;
 
-  /* Поверхности */
-  --surface: rgba(255, 255, 255, 0.045);
-  --surface-hover: rgba(255, 255, 255, 0.08);
-  --border: rgba(255, 255, 255, 0.09);
-  --card-front: linear-gradient(150deg, #36246f 0%, #282b72 100%);
-  --card-back: linear-gradient(150deg, #213a78 0%, #1d2a66 100%);
+  --text: #efeaff;
+  --text-muted: #9e96cc;
 
-  /* Текст */
-  --text: #f1eeff;
-  --text-muted: #a8a2d4;
-
-  /* Акценты */
   --accent: #7ae9eb;
-  --accent-2: #7ab1eb;
-  --accent-soft: rgba(122, 233, 235, 0.14);
-  --yellow: #ffc233;
-  --green: #2fbf8a;
-  --green-light: #6ff0bd;
-  --red: #ec5f49;
-  --red-light: #ff9a8a;
+  --accent-pink: #f472b6;
+  --border-violet: rgba(139, 92, 246, 0.24);
+  --border-cyan: rgba(122, 233, 235, 0.32);
 
-  --radius-lg: 22px;
-  --radius-md: 14px;
-  --shadow-card: 0 18px 40px -12px rgba(8, 4, 30, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --shadow-neon: 0 20px 50px -15px rgba(6, 3, 20, 0.9), 0 0 32px -16px rgba(122, 233, 235, 0.28);
 }
 
 html {
@@ -40,11 +25,12 @@ html {
 }
 
 body {
-  background-color: var(--bg);
+  background-color: var(--bg-top);
   background-image:
-    radial-gradient(680px 440px at 14% 0%, var(--bg-glow-violet), transparent 72%),
-    radial-gradient(620px 420px at 88% 8%, var(--bg-glow-blue), transparent 72%);
+    radial-gradient(640px 420px at 14% 0%, rgba(139, 92, 246, 0.22), transparent 72%),
+    radial-gradient(560px 400px at 88% 10%, rgba(122, 233, 235, 0.14), transparent 72%),
+    radial-gradient(520px 380px at 78% 72%, rgba(244, 114, 182, 0.10), transparent 75%),
+    linear-gradient(180deg, #120b28 0%, #1b1238 55%, #120b28 100%);
   background-attachment: fixed;
   color: var(--text);
 }
-
