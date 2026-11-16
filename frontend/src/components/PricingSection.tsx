@@ -9,6 +9,22 @@ function formatRub(kopeks: number): string {
   return Number.isInteger(rub) ? `${rub} ₽` : `${rub.toFixed(2)} ₽`;
 }
 
+function getEffectiveMonths(days: number): number {
+  if (days >= 360 && days <= 366) return 12;
+  return Math.max(days / 30, 1);
+}
+
+function formatDurationLabel(days: number): string {
+  if (days >= 360 && days <= 366) return "12 месяцев";
+  if (days % 30 === 0 && days >= 30) {
+    const m = days / 30;
+    if (m === 1) return "1 месяц";
+    if (m >= 2 && m <= 4) return `${m} месяца`;
+    return `${m} месяцев`;
+  }
+  return `${days} дн.`;
+}
+
 export function PricingSection({ plans }: { plans: PublicPlan[] }) {
   const [selectedPlan, setSelectedPlan] = useState<PublicPlan | null>(null);
   const [email, setEmail] = useState("");
@@ -16,6 +32,24 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
   const [loading, setLoading] = useState(false);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const sortedByDuration = [...plans].sort((a, b) => a.duration_days - b.duration_days);
+  const basePlan = sortedByDuration[0];
+  const baseMonthlyKopeks = basePlan
+    ? basePlan.price_kopeks / getEffectiveMonths(basePlan.duration_days)
+    : 0;
+
+  let bestPlanId: number | null = null;
+  if (plans.length > 1) {
+    let minMonthly = Infinity;
+    for (const p of plans) {
+      const mPrice = p.price_kopeks / getEffectiveMonths(p.duration_days);
+      if (mPrice < minMonthly) {
+        minMonthly = mPrice;
+        bestPlanId = p.id;
+      }
+    }
+  }
 
   function openCheckout(plan: PublicPlan) {
     setSelectedPlan(plan);
@@ -71,32 +105,55 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
       </h2>
 
       <div className="grid gap-6 md:grid-cols-3">
-        {plans.map((plan, idx) => {
-          const isPopular = idx === 1;
+        {plans.map((plan) => {
+          const isBestValue = plan.id === bestPlanId;
+          const months = getEffectiveMonths(plan.duration_days);
+          const monthlyKopeks = plan.price_kopeks / months;
+          const monthlyRub = Math.round(monthlyKopeks / 100);
+          const discountPercent =
+            baseMonthlyKopeks > 0 && plan.duration_days > (basePlan?.duration_days || 0)
+              ? Math.round((1 - monthlyKopeks / baseMonthlyKopeks) * 100)
+              : 0;
+
           return (
             <div
               key={plan.id}
               className={`flex flex-col justify-between rounded-[22px] border p-6 transition duration-300 ${
-                isPopular
+                isBestValue
                   ? "border-[#7ae9eb]/45 bg-gradient-to-br from-[#271657] to-[#161038] shadow-[0_20px_50px_-15px_rgba(6,3,20,0.9),0_0_36px_-14px_rgba(122,233,235,0.4)]"
                   : "border-[#8b5cf6]/25 bg-[#160e31]/95 shadow-[0_20px_45px_-15px_rgba(6,3,20,0.85)] hover:border-[#7ae9eb]/40"
               }`}
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-xl font-semibold text-[#efeaff]">{plan.name}</h3>
-                  {isPopular && (
-                    <span className="rounded-full border border-[#f472b6]/40 bg-[#f472b6]/15 px-2.5 py-0.5 text-xs font-semibold text-[#fbcfe8]">
-                      Выгодно
+                  <span className="inline-flex items-center rounded-lg border border-[#7ae9eb]/30 bg-[#7ae9eb]/10 px-2.5 py-1 text-xs font-bold text-[#7ae9eb]">
+                    {formatDurationLabel(plan.duration_days)}
+                  </span>
+
+                  {isBestValue ? (
+                    <span className="rounded-full border border-[#f472b6]/45 bg-[#f472b6]/15 px-2.5 py-0.5 text-xs font-semibold text-[#fbcfe8]">
+                      {discountPercent > 0 ? `Выгодно -${discountPercent}%` : "Самый выгодный"}
                     </span>
+                  ) : (
+                    discountPercent > 0 && (
+                      <span className="rounded-full border border-[#8b5cf6]/35 bg-[#1f1444] px-2.5 py-0.5 text-xs font-semibold text-[#d8d0ff]">
+                        -{discountPercent}%
+                      </span>
+                    )
                   )}
                 </div>
 
-                <div className="mt-4 flex items-baseline gap-2">
+                <h3 className="mt-4 text-xl font-semibold text-[#efeaff]">{plan.name}</h3>
+
+                <div className="mt-3 flex flex-wrap items-baseline gap-2.5">
                   <span className="text-4xl font-bold text-[#7ae9eb]">
                     {formatRub(plan.price_kopeks)}
                   </span>
-                  <span className="text-sm text-[#9e96cc]">/ {plan.duration_days} дн.</span>
+                  {months > 1 && (
+                    <span className="rounded-md bg-[#120b28]/80 px-2 py-0.5 text-xs font-medium text-[#d8d0ff]">
+                      {monthlyRub} ₽ / мес
+                    </span>
+                  )}
                 </div>
 
                 {plan.description && (
@@ -134,7 +191,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
               <div>
                 <h3 className="text-lg font-bold text-[#efeaff]">Оформление доступа</h3>
                 <p className="mt-1 text-sm text-[#9e96cc]">
-                  {selectedPlan.name} —{" "}
+                  {selectedPlan.name} ({formatDurationLabel(selectedPlan.duration_days)}) —{" "}
                   <span className="font-semibold text-[#7ae9eb]">
                     {formatRub(selectedPlan.price_kopeks)}
                   </span>

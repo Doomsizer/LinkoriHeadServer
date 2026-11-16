@@ -32,21 +32,19 @@ export function Navbar() {
 
         <div className="flex items-center gap-2.5">
           <a
-            href="https://t.me/Linkorisupport"
-            target="_blank"
-            rel="noreferrer"
-            className="hidden rounded-xl border border-[#8b5cf6]/30 bg-[#1b1238]/90 px-3.5 py-2 text-xs font-medium text-[#d8d0ff] transition hover:border-[#f472b6]/50 hover:text-[#fbcfe8] sm:inline-block"
-          >
-            Поддержка
-          </a>
-          <a
             href="https://t.me/linkoribot"
             target="_blank"
             rel="noreferrer"
-            className="rounded-xl border border-[#7ae9eb]/35 bg-[#7ae9eb]/10 px-3.5 py-2 text-xs font-semibold text-[#7ae9eb] transition hover:bg-[#7ae9eb]/20 hover:shadow-[0_0_20px_-6px_rgba(122,233,235,0.5)]"
+            className="hidden rounded-xl border border-[#7ae9eb]/35 bg-[#7ae9eb]/10 px-3.5 py-2 text-xs font-semibold text-[#7ae9eb] transition hover:bg-[#7ae9eb]/20 hover:shadow-[0_0_20px_-6px_rgba(122,233,235,0.5)] sm:inline-block"
           >
             Открыть бота
           </a>
+          <Link
+            href="/login"
+            className="rounded-xl border border-[#8b5cf6]/35 bg-[#1b1238]/90 px-3.5 py-2 text-xs font-semibold text-[#efeaff] transition hover:border-[#f472b6]/50 hover:text-[#fbcfe8]"
+          >
+            Войти
+          </Link>
           <Link
             href="/#pricing"
             className="rounded-xl bg-[#7ae9eb] px-4 py-2 text-xs font-bold text-[#120b28] shadow-[0_0_22px_-6px_rgba(122,233,235,0.6)] transition hover:bg-[#9ef1f3]"

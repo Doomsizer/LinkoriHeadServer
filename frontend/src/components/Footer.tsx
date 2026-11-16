@@ -10,18 +10,10 @@ export function Footer() {
               <span className="h-2 w-2 rounded-full bg-[#7ae9eb] shadow-[0_0_10px_#7ae9eb]" />
               <span>Linkori</span>
             </div>
-            <p className="mt-3 text-sm leading-relaxed text-[#9e96cc]">
-              Высокоскоростной прокси-сервис для шифрования трафика, стабильной маршрутизации и
-              безопасной работы в сети.
-            </p>
-            <p className="mt-3 text-xs text-[#7e75ad]">
-              Использование инфраструктуры осуществляется пользователем самостоятельно и под его
-              полную ответственность.
-            </p>
           </div>
 
           <div>
-            <div className="text-sm font-semibold text-[#efeaff]">Документы и бот</div>
+            <div className="text-sm font-semibold text-[#efeaff]">Документы</div>
             <ul className="mt-3 space-y-2 text-sm text-[#9e96cc]">
               <li>
                 <Link href="/privacy" className="transition hover:text-[#7ae9eb]">
@@ -33,21 +25,6 @@ export function Footer() {
                   Пользовательское соглашение
                 </Link>
               </li>
-              <li>
-                <Link href="/#pricing" className="transition hover:text-[#7ae9eb]">
-                  Тарифы
-                </Link>
-              </li>
-              <li>
-                <a
-                  href="https://t.me/linkoribot"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[#7ae9eb] hover:underline"
-                >
-                  Telegram-бот @linkoribot
-                </a>
-              </li>
             </ul>
           </div>
 
@@ -55,7 +32,18 @@ export function Footer() {
             <div className="text-sm font-semibold text-[#efeaff]">Поддержка и контакты</div>
             <ul className="mt-3 space-y-2 text-sm text-[#9e96cc]">
               <li>
-                Telegram:{" "}
+                Telegram-бот:{" "}
+                <a
+                  href="https://t.me/linkoribot"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[#7ae9eb] hover:underline"
+                >
+                  @linkoribot
+                </a>
+              </li>
+              <li>
+                Поддержка:{" "}
                 <a
                   href="https://t.me/Linkorisupport"
                   target="_blank"
@@ -70,9 +58,6 @@ export function Footer() {
                 <a href="mailto:support@linkori.org" className="text-[#7ae9eb] hover:underline">
                   support@linkori.org
                 </a>
-              </li>
-              <li className="text-xs text-[#7e75ad]">
-                Лимит одной транзакции: до 10 000 руб.
               </li>
             </ul>
           </div>
