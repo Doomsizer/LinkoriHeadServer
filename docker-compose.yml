@@ -94,7 +94,7 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
-      - ./bot/.env
+      - ./bot.env
     environment:
       API_BASE_URL: http://django:8000
     depends_on:
