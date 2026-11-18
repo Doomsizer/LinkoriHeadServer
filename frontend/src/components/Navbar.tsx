@@ -1,6 +1,31 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 export function Navbar() {
+  const [isAuthed, setIsAuthed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function checkSession() {
+      try {
+        const res = await fetch("/api/accounts/me/", { credentials: "include" });
+        if (active) setIsAuthed(res.ok);
+      } catch {
+        if (active) setIsAuthed(false);
+      }
+    }
+
+    checkSession();
+    window.addEventListener("linkori-auth-changed", checkSession);
+    return () => {
+      active = false;
+      window.removeEventListener("linkori-auth-changed", checkSession);
+    };
+  }, []);
+
   return (
     <header className="sticky top-0 z-40 border-b border-[#8b5cf6]/20 bg-[#120b28]/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3.5">
@@ -40,10 +65,10 @@ export function Navbar() {
             Открыть бота
           </a>
           <Link
-            href="/login"
+            href={isAuthed ? "/cabinet" : "/login"}
             className="rounded-xl border border-[#8b5cf6]/35 bg-[#1b1238]/90 px-3.5 py-2 text-xs font-semibold text-[#efeaff] transition hover:border-[#f472b6]/50 hover:text-[#fbcfe8]"
           >
-            Войти
+            {isAuthed ? "Кабинет" : "Войти"}
           </Link>
           <Link
             href="/#pricing"

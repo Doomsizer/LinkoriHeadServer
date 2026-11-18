@@ -105,6 +105,13 @@ CSRF_TRUSTED_ORIGINS = [
     "https://www.linkori.org",
 ]
 
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SECURE = not DEBUG
+
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -142,10 +149,12 @@ SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
 SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/Linkorisupport")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 
-# Токены внутренних интеграций (стенд проверок и Telegram-бот)
+# Токены внутренних интеграций и Telegram-бот
 PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
 PROBE_XRAY_UUID = os.getenv("PROBE_XRAY_UUID", "")
 BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "linkoribot").lstrip("@")
+TELEGRAM_AUTH_TTL_SECONDS = int(os.getenv("TELEGRAM_AUTH_TTL_SECONDS", "300"))
 
 # Биллинг, рефералка и платежный шлюз
 REFERRAL_BONUS_PERCENT = int(os.getenv("REFERRAL_BONUS_PERCENT", "15"))

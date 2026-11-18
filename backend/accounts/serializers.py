@@ -24,3 +24,19 @@ class BotGetOrCreateUserSerializer(serializers.Serializer):
 class BotAcceptLegalSerializer(serializers.Serializer):
     telegram_id = serializers.IntegerField(min_value=1)
     accepted = serializers.BooleanField(required=False, default=True)
+
+
+class TelegramAuthInitSerializer(serializers.Serializer):
+    accepted_legal = serializers.BooleanField(required=False, default=False)
+
+
+class TelegramAuthConfirmSerializer(serializers.Serializer):
+    auth_token = serializers.CharField(max_length=128)
+    telegram_id = serializers.IntegerField(min_value=1)
+    telegram_username = serializers.CharField(
+        max_length=64,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default="",
+    )
