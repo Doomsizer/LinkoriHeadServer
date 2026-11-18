@@ -54,3 +54,7 @@ backend/.env
 frontend/.env
 *.env.local
 tokens.txt
+
+#bot
+bot_repo/
+bot.env

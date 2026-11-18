@@ -87,6 +87,19 @@ services:
     depends_on:
       - django
 
+  bot:
+    build:
+      context: ./bot
+    container_name: linkori_bot
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+      - ./bot/.env
+    environment:
+      API_BASE_URL: http://django:8000
+    depends_on:
+      - django
+
 volumes:
   postgres_data:
   redis_data:
