@@ -89,7 +89,7 @@ services:
 
   bot:
     build:
-      context: ./bot-repo/bot
+      context: ./bot_repo/bot
     container_name: linkori_bot
     restart: unless-stopped
     env_file:
