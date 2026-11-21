@@ -24,6 +24,11 @@ def _build_remark(inbound: NodeInbound, remark_override: str | None = None) -> s
     return quote(label, safe="")
 
 
+def _replace_uri_remark(uri: str, new_remark: str) -> str:
+    base = uri.split("#", 1)[0]
+    return f"{base}#{quote(new_remark, safe='')}"
+
+
 def _clean_query(params: dict[str, str | int | None]) -> str:
     filtered = {k: str(v) for k, v in params.items() if v is not None and v != ""}
     return urlencode(filtered)
@@ -150,8 +155,10 @@ def build_subscription_payload(
     device_os: str = "",
     user_agent: str = "",
     network_type: str | None = None,
+    extra_uris: Iterable[str] = (),
 ) -> str:
     inbound_list = list(inbounds)
+    public_uris = [u.strip() for u in extra_uris if u and u.strip()]
     uris: list[str] = []
 
     best_inbound, best_latency = select_best_inbound(inbound_list, network_type=network_type)
@@ -170,6 +177,8 @@ def build_subscription_payload(
                 remark_override=best_label,
             )
         )
+    elif public_uris:
+        uris.append(_replace_uri_remark(public_uris[0], "⚡ Лучший сервер"))
 
     for inbound in inbound_list:
         uris.append(
@@ -180,6 +189,8 @@ def build_subscription_payload(
                 user_agent=user_agent,
             )
         )
+
+    uris.extend(public_uris)
 
     raw_text = "\n".join(uris)
     return base64.b64encode(raw_text.encode("utf-8")).decode("ascii")

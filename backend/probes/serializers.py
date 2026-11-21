@@ -22,7 +22,7 @@ class ProbeReportSerializer(serializers.Serializer):
         allow_empty=True,
     )
     own_results = OwnInboundResultSerializer(many=True, required=False, default=list)
-    sync_own = serializers.BooleanField(required=False, default=False)
+    sync_own = serializers.BooleanField(required=False, default=True)
 
     def validate_configs(self, value: list[str]) -> list[str]:
         cleaned: list[str] = []

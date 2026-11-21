@@ -1,5 +1,6 @@
 import base64
 import re
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import transaction
@@ -10,6 +11,7 @@ from django.views import View
 
 from billing.models import Subscription, SubscriptionDevice
 from nodes.models import NodeInbound
+from probes.models import WorkingPublicConfig
 
 from .uri_builder import build_subscription_payload
 
@@ -73,6 +75,24 @@ def build_subscription_headers(
     }
 
 
+def _uri_protocol_family(uri: str) -> str:
+    scheme = uri.split("://", 1)[0].lower().strip()
+    if scheme in ("hy2", "hysteria2"):
+        return "hysteria2"
+    return scheme
+
+
+def _inbound_protocol_family(inbound: NodeInbound) -> str:
+    if inbound.protocol == NodeInbound.Protocol.HYSTERIA2:
+        return "hysteria2"
+    if inbound.protocol in (
+        NodeInbound.Protocol.VLESS_REALITY,
+        NodeInbound.Protocol.VLESS_WS,
+    ):
+        return "vless"
+    return inbound.protocol
+
+
 def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
     base_qs = NodeInbound.objects.select_related("node").filter(
         is_enabled=True,
@@ -81,19 +101,45 @@ def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
     live_statuses = [NodeInbound.HealthStatus.ONLINE, NodeInbound.HealthStatus.DEGRADED]
 
     if network_type == "lte":
-        if base_qs.exclude(lte_health_status=NodeInbound.HealthStatus.UNKNOWN).exists():
-            return list(
-                base_qs.filter(lte_health_status__in=live_statuses).order_by("node__priority", "id")
-            )
-    elif network_type == "wifi":
-        if base_qs.exclude(wifi_health_status=NodeInbound.HealthStatus.UNKNOWN).exists():
-            return list(
-                base_qs.filter(wifi_health_status__in=live_statuses).order_by(
-                    "node__priority", "id"
-                )
-            )
-
+        return list(
+            base_qs.filter(lte_health_status__in=live_statuses).order_by("node__priority", "id")
+        )
+    if network_type == "wifi":
+        return list(
+            base_qs.filter(wifi_health_status__in=live_statuses).order_by("node__priority", "id")
+        )
     return list(base_qs.filter(health_status__in=live_statuses).order_by("node__priority", "id"))
+
+
+def _select_working_public_uris(network_type: str | None) -> list[str]:
+    own_endpoint_keys: set[tuple[str, str, int]] = set()
+    for inb in NodeInbound.objects.select_related("node").filter(
+        is_enabled=True,
+        node__is_enabled=True,
+    ):
+        fam = _inbound_protocol_family(inb)
+        own_endpoint_keys.add((fam, inb.connect_host.lower(), int(inb.connect_port)))
+        own_endpoint_keys.add((fam, str(inb.node.ip_address).lower(), int(inb.connect_port)))
+
+    qs = WorkingPublicConfig.objects.filter(is_active=True).order_by("id")
+    if network_type == "lte":
+        qs = qs.filter(source="lte")
+    elif network_type == "wifi":
+        qs = qs.filter(source="wifi")
+
+    seen_hashes: set[str] = set()
+    uris: list[str] = []
+    for cfg in qs:
+        if cfg.uri_hash in seen_hashes:
+            continue
+        parsed = urlparse(cfg.uri)
+        if parsed.hostname and parsed.port:
+            ep = (_uri_protocol_family(cfg.uri), parsed.hostname.lower(), int(parsed.port))
+            if ep in own_endpoint_keys:
+                continue
+        seen_hashes.add(cfg.uri_hash)
+        uris.append(cfg.uri)
+    return uris
 
 
 class SubscriptionOpenAppView(View):
@@ -266,16 +312,18 @@ class SubscriptionGatewayView(View):
                     last_ip=client_ip,
                 )
 
-        # 6. Выбираем только живые инбаунды под нужную сеть (общая / LTE / Wi-Fi)
+        # 6. Собираем наши живые инбаунды + рабочие внешние конфиги стенда
         inbounds = _select_live_inbounds(network_type=net)
+        public_uris = _select_working_public_uris(network_type=net)
 
-        # 7. Собираем base64-подписку с автоматическим «⚡ Лучший сервер» в начале
+        # 7. Собираем base64-подписку с «⚡ Лучший сервер» в начале
         payload = build_subscription_payload(
             subscription=subscription,
             inbounds=inbounds,
             device_os=device_os,
             user_agent=user_agent,
             network_type=net,
+            extra_uris=public_uris,
         )
 
         response = HttpResponse(
