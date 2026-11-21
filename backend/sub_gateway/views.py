@@ -46,8 +46,17 @@ def is_browser_request(request) -> bool:
     return False
 
 
-def build_subscription_headers(subscription: Subscription) -> dict[str, str]:
-    title_b64 = base64.b64encode(settings.SUB_PROFILE_TITLE.encode("utf-8")).decode("ascii")
+def build_subscription_headers(
+    subscription: Subscription,
+    network_type: str | None = None,
+) -> dict[str, str]:
+    title = settings.SUB_PROFILE_TITLE
+    if network_type == "lte":
+        title = f"{title} LTE"
+    elif network_type == "wifi":
+        title = f"{title} Wi-Fi"
+
+    title_b64 = base64.b64encode(title.encode("utf-8")).decode("ascii")
     expire_ts = int(subscription.expires_at.timestamp())
     userinfo = (
         f"upload=0; download={subscription.traffic_used_bytes}; "
@@ -64,8 +73,32 @@ def build_subscription_headers(subscription: Subscription) -> dict[str, str]:
     }
 
 
+def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
+    base_qs = NodeInbound.objects.select_related("node").filter(
+        is_enabled=True,
+        node__is_enabled=True,
+    )
+    live_statuses = [NodeInbound.HealthStatus.ONLINE, NodeInbound.HealthStatus.DEGRADED]
+
+    if network_type == "lte":
+        if base_qs.exclude(lte_health_status=NodeInbound.HealthStatus.UNKNOWN).exists():
+            return list(
+                base_qs.filter(lte_health_status__in=live_statuses).order_by("node__priority", "id")
+            )
+    elif network_type == "wifi":
+        if base_qs.exclude(wifi_health_status=NodeInbound.HealthStatus.UNKNOWN).exists():
+            return list(
+                base_qs.filter(wifi_health_status__in=live_statuses).order_by(
+                    "node__priority", "id"
+                )
+            )
+
+    return list(base_qs.filter(health_status__in=live_statuses).order_by("node__priority", "id"))
+
+
 class SubscriptionOpenAppView(View):
     http_method_names = ["get", "head"]
+    network_type: str | None = None
 
     def get(self, request, sub_token: str, app_name: str):
         app_entry = DEEPLINK_SCHEMES.get(app_name.lower())
@@ -76,9 +109,13 @@ class SubscriptionOpenAppView(View):
             return HttpResponse(status=404)
 
         app_label, template_uri = app_entry
-        sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}"
-        deeplink = template_uri.format(sub_url=sub_url)
+        net = self.network_type or request.GET.get("net", "").lower().strip()
+        if net in ("lte", "wifi"):
+            sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}/{net}"
+        else:
+            sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}"
 
+        deeplink = template_uri.format(sub_url=sub_url)
         response = render(
             request,
             "sub_gateway/open_app.html",
@@ -95,25 +132,57 @@ class SubscriptionOpenAppView(View):
 
 class SubscriptionGatewayView(View):
     http_method_names = ["get", "head"]
+    network_type: str | None = None
 
     def get(self, request, sub_token: str):
-        # 1. Отсекаем браузеры HTML-заглушкой без конфигов
-        if is_browser_request(request):
-            response = render(
-                request,
-                "sub_gateway/browser_stub.html",
-                {"web_url": settings.SUB_WEB_URL},
-                status=200,
-            )
-            response["Cache-Control"] = "no-store, no-cache, must-revalidate"
-            return response
+        net = self.network_type or request.GET.get("net", "").lower().strip()
+        if net not in ("lte", "wifi"):
+            net = None
 
-        # 2. Ищем подписку по токену
         subscription = (
             Subscription.objects.select_related("user", "plan")
             .filter(sub_token=sub_token)
             .first()
         )
+
+        # 1. Отсекаем браузеры красивой страницей без конфигов серверов
+        if is_browser_request(request):
+            base_sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}"
+            context = {
+                "sub_exists": subscription is not None,
+                "web_url": settings.SUB_WEB_URL,
+                "support_url": settings.SUB_SUPPORT_URL,
+                "plan_name": subscription.plan.name if subscription else "",
+                "expires_date": (
+                    subscription.expires_at.strftime("%d.%m.%Y") if subscription else ""
+                ),
+                "sub_url": f"{base_sub_url}/{net}" if net else base_sub_url,
+                "sub_lte_url": f"{base_sub_url}/lte",
+                "sub_wifi_url": f"{base_sub_url}/wifi",
+                "open_happ_url": (
+                    f"{base_sub_url}/{net}/open/happ" if net else f"{base_sub_url}/open/happ"
+                ),
+                "open_v2raytun_url": (
+                    f"{base_sub_url}/{net}/open/v2raytun"
+                    if net
+                    else f"{base_sub_url}/open/v2raytun"
+                ),
+                "open_hiddify_url": (
+                    f"{base_sub_url}/{net}/open/hiddify"
+                    if net
+                    else f"{base_sub_url}/open/hiddify"
+                ),
+            }
+            response = render(
+                request,
+                "sub_gateway/browser_stub.html",
+                context,
+                status=200,
+            )
+            response["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return response
+
+        # 2. Токен не найден
         if subscription is None:
             return HttpResponse(status=404)
 
@@ -129,7 +198,7 @@ class SubscriptionGatewayView(View):
         # 4. Проверяем активность подписки, срок действия и лимит трафика
         if not subscription.is_valid_now(timezone.now()):
             response = HttpResponse(status=403)
-            for k, v in build_subscription_headers(subscription).items():
+            for k, v in build_subscription_headers(subscription, network_type=net).items():
                 response[k] = v
             response["Cache-Control"] = "no-store"
             return response
@@ -197,26 +266,16 @@ class SubscriptionGatewayView(View):
                     last_ip=client_ip,
                 )
 
-        # 6. Выбираем только включенные и живые инбаунды (online / degraded)
-        inbounds = (
-            NodeInbound.objects.select_related("node")
-            .filter(
-                is_enabled=True,
-                node__is_enabled=True,
-                health_status__in=[
-                    NodeInbound.HealthStatus.ONLINE,
-                    NodeInbound.HealthStatus.DEGRADED,
-                ],
-            )
-            .order_by("node__priority", "id")
-        )
+        # 6. Выбираем только живые инбаунды под нужную сеть (общая / LTE / Wi-Fi)
+        inbounds = _select_live_inbounds(network_type=net)
 
-        # 7. Собираем base64-подписку
+        # 7. Собираем base64-подписку с автоматическим «⚡ Лучший сервер» в начале
         payload = build_subscription_payload(
             subscription=subscription,
             inbounds=inbounds,
             device_os=device_os,
             user_agent=user_agent,
+            network_type=net,
         )
 
         response = HttpResponse(
@@ -224,7 +283,9 @@ class SubscriptionGatewayView(View):
             content_type="text/plain; charset=utf-8",
             status=200,
         )
-        for header_name, header_value in build_subscription_headers(subscription).items():
+        for header_name, header_value in build_subscription_headers(
+            subscription, network_type=net
+        ).items():
             response[header_name] = header_value
         response["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return response

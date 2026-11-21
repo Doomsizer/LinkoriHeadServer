@@ -103,12 +103,36 @@ class NodeInbound(models.Model):
         choices=HealthStatus.choices,
         default=HealthStatus.UNKNOWN,
         db_index=True,
-        verbose_name="Состояние",
+        verbose_name="Общее состояние",
     )
     last_latency_ms = models.PositiveIntegerField(
         null=True,
         blank=True,
-        verbose_name="Задержка (мс)",
+        verbose_name="Общая задержка (мс)",
+    )
+    lte_health_status = models.CharField(
+        max_length=16,
+        choices=HealthStatus.choices,
+        default=HealthStatus.UNKNOWN,
+        db_index=True,
+        verbose_name="Состояние LTE",
+    )
+    lte_latency_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Задержка LTE (мс)",
+    )
+    wifi_health_status = models.CharField(
+        max_length=16,
+        choices=HealthStatus.choices,
+        default=HealthStatus.UNKNOWN,
+        db_index=True,
+        verbose_name="Состояние Wi-Fi",
+    )
+    wifi_latency_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Задержка Wi-Fi (мс)",
     )
     last_checked_at = models.DateTimeField(
         null=True,

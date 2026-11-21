@@ -1,6 +1,27 @@
 from django.contrib import admin
 
-from .models import ProbeSnapshot, WorkingPublicConfig
+from .models import ProbeSnapshot, ProbeStand, WorkingPublicConfig
+
+
+@admin.register(ProbeStand)
+class ProbeStandAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "network_type",
+        "short_token",
+        "is_active",
+        "last_seen_at",
+        "created_at",
+    )
+    list_filter = ("network_type", "is_active", "created_at")
+    search_fields = ("name", "token")
+    readonly_fields = ("last_seen_at", "created_at")
+
+    @admin.display(description="Токен")
+    def short_token(self, obj):
+        if len(obj.token) > 16:
+            return f"{obj.token[:8]}...{obj.token[-6:]}"
+        return obj.token
 
 
 @admin.register(ProbeSnapshot)

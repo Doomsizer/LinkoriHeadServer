@@ -1,10 +1,59 @@
 import hashlib
+import secrets
 
 from django.db import models
 
 
 def hash_uri(uri: str) -> str:
     return hashlib.sha256(uri.encode("utf-8")).hexdigest()
+
+
+def generate_probe_token() -> str:
+    return secrets.token_hex(32)
+
+
+class ProbeStand(models.Model):
+    class NetworkType(models.TextChoices):
+        LTE = "lte", "LTE (мобильная сеть)"
+        WIFI = "wifi", "Wi-Fi (домашняя/проводная сеть)"
+
+    name = models.CharField(max_length=128, unique=True, verbose_name="Название стенда")
+    network_type = models.CharField(
+        max_length=16,
+        choices=NetworkType.choices,
+        db_index=True,
+        verbose_name="Тип сети",
+    )
+    token = models.CharField(
+        max_length=128,
+        unique=True,
+        db_index=True,
+        default=generate_probe_token,
+        verbose_name="API-токен стенда",
+        help_text="Генерируется автоматически при создании, если оставить пустым",
+    )
+    probe_xray_uuid = models.UUIDField(
+        null=True,
+        blank=True,
+        verbose_name="Сервисный Xray UUID (опционально)",
+        help_text="Если пусто — берется PROBE_XRAY_UUID из настроек сервера",
+    )
+    is_active = models.BooleanField(default=True, db_index=True, verbose_name="Активен")
+    last_seen_at = models.DateTimeField(null=True, blank=True, verbose_name="Последняя активность")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создан")
+
+    class Meta:
+        verbose_name = "Тестовый стенд"
+        verbose_name_plural = "Тестовые стенды"
+        ordering = ["network_type", "name"]
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = generate_probe_token()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"[{self.network_type.upper()}] {self.name}"
 
 
 class ProbeSnapshot(models.Model):

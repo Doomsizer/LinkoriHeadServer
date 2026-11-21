@@ -15,6 +15,8 @@ class NodeInboundInline(admin.TabularInline):
         "connect_port",
         "is_enabled",
         "health_status",
+        "lte_health_status",
+        "wifi_health_status",
         "last_latency_ms",
     )
     readonly_fields = ("last_latency_ms", "last_checked_at")
@@ -111,10 +113,20 @@ class NodeInboundAdmin(admin.ModelAdmin):
         "connect_port",
         "is_enabled",
         "health_status",
-        "last_latency_ms",
+        "lte_health_status",
+        "lte_latency_ms",
+        "wifi_health_status",
+        "wifi_latency_ms",
         "last_checked_at",
     )
-    list_filter = ("protocol", "health_status", "is_enabled", "node__country_code")
+    list_filter = (
+        "protocol",
+        "health_status",
+        "lte_health_status",
+        "wifi_health_status",
+        "is_enabled",
+        "node__country_code",
+    )
     search_fields = ("display_name", "connect_host", "node__name", "node__ip_address")
     raw_id_fields = ("node",)
     readonly_fields = ("last_checked_at",)

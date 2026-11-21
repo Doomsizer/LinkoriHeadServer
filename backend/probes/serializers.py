@@ -10,12 +10,13 @@ class OwnInboundResultSerializer(serializers.Serializer):
 
 
 class ProbeReportSerializer(serializers.Serializer):
-    source = serializers.SlugField(max_length=64, required=False, default="default")
+    source = serializers.SlugField(max_length=64, required=False, default="")
     configs = serializers.ListField(
         child=serializers.CharField(max_length=4096, trim_whitespace=True),
         allow_empty=True,
     )
     own_results = OwnInboundResultSerializer(many=True, required=False, default=list)
+    sync_own = serializers.BooleanField(required=False, default=False)
 
     def validate_configs(self, value: list[str]) -> list[str]:
         cleaned: list[str] = []
