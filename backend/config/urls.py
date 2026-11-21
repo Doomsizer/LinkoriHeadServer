@@ -9,7 +9,7 @@ def healthcheck(request):
 
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path(settings.ADMIN_URL_PATH, admin.site.urls),
     path("api/health/", healthcheck, name="api-health"),
     path("api/accounts/", include("accounts.urls")),
     path("api/bot/", include("billing.bot_urls")),

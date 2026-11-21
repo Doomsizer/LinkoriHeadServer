@@ -1,8 +1,19 @@
 from django.urls import path
+from django.views.generic import RedirectView
 
 from .views import SubscriptionGatewayView, SubscriptionOpenAppView
 
 urlpatterns = [
+    path(
+        "favicon.ico",
+        RedirectView.as_view(url="https://linkori.org/icon.png", permanent=False),
+        name="sub-favicon",
+    ),
+    path(
+        "icon.png",
+        RedirectView.as_view(url="https://linkori.org/icon.png", permanent=False),
+        name="sub-icon",
+    ),
     path(
         "<str:sub_token>/lte/open/<str:app_name>",
         SubscriptionOpenAppView.as_view(network_type="lte"),

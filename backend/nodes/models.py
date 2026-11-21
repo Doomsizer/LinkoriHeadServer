@@ -26,6 +26,12 @@ class VpnNode(models.Model):
         verbose_name="Проверять SSL панели",
         help_text="Выключите, если панель 3x-ui работает по IP с самоподписанным сертификатом",
     )
+    probe_xray_uuid = models.UUIDField(
+        null=True,
+        blank=True,
+        verbose_name="Админский/тестовый Xray UUID",
+        help_text="Создается автоматически в 3x-ui (linkori_probe_admin) при синхронизации ноды",
+    )
     is_enabled = models.BooleanField(
         default=True,
         db_index=True,

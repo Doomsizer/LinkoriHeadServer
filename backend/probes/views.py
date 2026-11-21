@@ -20,20 +20,6 @@ from .permissions import HasProbeToken
 from .serializers import ProbeReportSerializer
 
 
-def _resolve_network_type(request, route_network_type: str | None) -> tuple[str | None, str | None]:
-    stand = getattr(request, "probe_stand", None)
-    if route_network_type and stand is not None and stand.network_type != route_network_type:
-        return None, (
-            f"Токен стенда «{stand.name}» ({stand.network_type}) не подходит для "
-            f"эндпоинта «{route_network_type}»"
-        )
-    if route_network_type:
-        return route_network_type, None
-    if stand is not None:
-        return stand.network_type, None
-    return None, None
-
-
 def _recompute_overall_inbound_status(inbound: NodeInbound):
     lte = inbound.lte_health_status
     wifi = inbound.wifi_health_status
@@ -95,19 +81,14 @@ def _apply_inbound_probe_result(
 
 class ProbeNodesListView(APIView):
     """
-    Отдает стенду список наших включенных инбаундов с готовыми URI
-    под сервисным Xray UUID. Поддерживает разделение на lte и wifi.
+    Единый эндпоинт для любого стенда (LTE или Wi-Fi): всегда отдает все
+    включенные инбаунды с админским Xray UUID (приоритетно node.probe_xray_uuid).
     """
 
     authentication_classes = []
     permission_classes = [HasProbeToken]
-    network_type: str | None = None
 
     def get(self, request):
-        resolved_net, err = _resolve_network_type(request, self.network_type)
-        if err:
-            return Response({"detail": err}, status=status.HTTP_403_FORBIDDEN)
-
         stand = getattr(request, "probe_stand", None)
         stand_uuid = str(stand.probe_xray_uuid) if (stand and stand.probe_xray_uuid) else ""
 
@@ -121,37 +102,16 @@ class ProbeNodesListView(APIView):
         if protocol:
             queryset = queryset.filter(protocol=protocol)
 
-        if request.query_params.get("only_live") == "1":
-            if resolved_net == "lte":
-                queryset = queryset.filter(
-                    lte_health_status__in=[
-                        NodeInbound.HealthStatus.ONLINE,
-                        NodeInbound.HealthStatus.DEGRADED,
-                    ]
-                )
-            elif resolved_net == "wifi":
-                queryset = queryset.filter(
-                    wifi_health_status__in=[
-                        NodeInbound.HealthStatus.ONLINE,
-                        NodeInbound.HealthStatus.DEGRADED,
-                    ]
-                )
-            else:
-                queryset = queryset.filter(
-                    health_status__in=[
-                        NodeInbound.HealthStatus.ONLINE,
-                        NodeInbound.HealthStatus.DEGRADED,
-                    ]
-                )
-
         nodes_payload = []
         skipped = []
 
         for inbound in queryset:
             extra = inbound.extra_params or {}
+            node_uuid = str(inbound.node.probe_xray_uuid or "").strip()
             xray_uuid = str(
-                stand_uuid
-                or extra.get("probe_xray_uuid")
+                extra.get("probe_xray_uuid")
+                or node_uuid
+                or stand_uuid
                 or settings.PROBE_XRAY_UUID
                 or ""
             ).strip()
@@ -190,7 +150,8 @@ class ProbeNodesListView(APIView):
 
         return Response(
             {
-                "network_type": resolved_net or "all",
+                "stand": stand.name if stand else None,
+                "network_type": stand.network_type if stand else "all",
                 "count": len(nodes_payload),
                 "nodes": nodes_payload,
                 "skipped": skipped,
@@ -201,23 +162,24 @@ class ProbeNodesListView(APIView):
 
 class ProbeReportView(APIView):
     """
-    Принимает от стенда рабочие ссылки конфигов (отдельно для lte, wifi или default).
+    Принимает рабочие ссылки от стенда. Тип сети (lte / wifi) определяется
+    автоматически по токену ProbeStand или из поля network_type в теле запроса.
     """
 
     authentication_classes = []
     permission_classes = [HasProbeToken]
-    network_type: str | None = None
 
     def post(self, request):
-        resolved_net, err = _resolve_network_type(request, self.network_type)
-        if err:
-            return Response({"detail": err}, status=status.HTTP_403_FORBIDDEN)
-
         serializer = ProbeReportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        stand = getattr(request, "probe_stand", None)
+        resolved_net = serializer.validated_data.get("network_type") or (
+            stand.network_type if stand else None
+        )
         raw_source = serializer.validated_data.get("source", "").strip()
         source = raw_source or resolved_net or "default"
+
         new_configs = sorted(serializer.validated_data["configs"])
         own_results = serializer.validated_data.get("own_results", [])
         sync_own = serializer.validated_data.get("sync_own", False)
@@ -367,18 +329,22 @@ class ProbeReportView(APIView):
 
 
 class ProbeActiveConfigsView(APIView):
-    """Возвращает собранные рабочие конфиги / подписку для LTE, Wi-Fi или по source."""
+    """
+    Возвращает рабочие конфиги / собранную подписку (?source=lte|wifi, ?format=json|plain|base64).
+    Если source не указан — берет network_type стенда из токена.
+    """
 
     authentication_classes = []
     permission_classes = [HasProbeToken]
-    network_type: str | None = None
 
     def get(self, request):
-        resolved_net, err = _resolve_network_type(request, self.network_type)
-        if err:
-            return Response({"detail": err}, status=status.HTTP_403_FORBIDDEN)
-
-        source = request.query_params.get("source", "").strip() or resolved_net or "default"
+        stand = getattr(request, "probe_stand", None)
+        source = (
+            request.query_params.get("source", "").strip()
+            or request.query_params.get("network", "").strip()
+            or (stand.network_type if stand else "")
+            or "default"
+        )
         qs = WorkingPublicConfig.objects.filter(source=source, is_active=True).order_by("id")
         uris = list(qs.values_list("uri", flat=True))
 
@@ -391,7 +357,6 @@ class ProbeActiveConfigsView(APIView):
 
         return Response(
             {
-                "network_type": resolved_net or "all",
                 "source": source,
                 "count": len(uris),
                 "configs": uris,

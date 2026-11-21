@@ -29,13 +29,14 @@ class VpnNodeAdmin(admin.ModelAdmin):
         "country_code",
         "flag_emoji",
         "ip_address",
+        "probe_xray_uuid",
         "inbounds_count",
         "is_enabled",
         "priority",
         "updated_at",
     )
     list_filter = ("is_enabled", "country_code")
-    search_fields = ("name", "country_code", "ip_address", "panel_url")
+    search_fields = ("name", "country_code", "ip_address", "panel_url", "=probe_xray_uuid")
     ordering = ("priority", "name")
     inlines = (NodeInboundInline,)
     actions = ("sync_selected_nodes",)
@@ -51,6 +52,7 @@ class VpnNodeAdmin(admin.ModelAdmin):
                     "panel_url",
                     "panel_api_token",
                     "panel_verify_ssl",
+                    "probe_xray_uuid",
                 ),
             },
         ),
@@ -70,7 +72,8 @@ class VpnNodeAdmin(admin.ModelAdmin):
                     (
                         f"Инбаунды ноды «{obj.name}» синхронизированы: "
                         f"создано {res.created}, обновлено {res.updated}, "
-                        f"отключено {res.disabled}, пропущено {res.skipped}."
+                        f"отключено {res.disabled}, пропущено {res.skipped}. "
+                        f"Админ-UUID: {res.probe_uuid or '-'}"
                     ),
                     level=messages.SUCCESS,
                 )
@@ -91,7 +94,7 @@ class VpnNodeAdmin(admin.ModelAdmin):
                     (
                         f"Нода «{node.name}»: создано {res.created}, "
                         f"обновлено {res.updated}, отключено {res.disabled}, "
-                        f"пропущено {res.skipped}."
+                        f"пропущено {res.skipped}. Админ-UUID: {res.probe_uuid or '-'}"
                     ),
                     level=messages.SUCCESS,
                 )

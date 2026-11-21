@@ -1,4 +1,5 @@
 import json
+import uuid
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -6,6 +7,8 @@ import httpx
 from django.db import transaction
 
 from .models import NodeInbound, VpnNode
+
+PROBE_ADMIN_EMAIL = "linkori_probe_admin"
 
 
 class XuiSyncError(Exception):
@@ -18,6 +21,7 @@ class SyncResult:
     updated: int = 0
     disabled: int = 0
     skipped: int = 0
+    probe_uuid: str = ""
 
 
 def _normalize_panel_base_url(panel_url: str) -> str:
@@ -249,11 +253,164 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
     return None
 
 
+def ensure_probe_admin_client_on_panel(
+    node: VpnNode,
+    target_inbound_ids: list[int],
+    timeout: float = 10.0,
+) -> uuid.UUID | None:
+    """
+    Создает или проверяет сервисного админ-клиента (linkori_probe_admin) на панели 3x-ui
+    с flow=xtls-rprx-vision и сохраняет его UUID в node.probe_xray_uuid.
+    """
+    if not target_inbound_ids:
+        return node.probe_xray_uuid
+
+    base_url = _normalize_panel_base_url(node.panel_url)
+    headers = _build_auth_headers(node)
+    email_q = quote(PROBE_ADMIN_EMAIL, safe="")
+
+    with httpx.Client(
+        timeout=timeout,
+        verify=node.panel_verify_ssl,
+        follow_redirects=True,
+    ) as client:
+        get_url = f"{base_url}/panel/api/clients/get/{email_q}"
+        try:
+            get_resp = client.get(get_url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise XuiSyncError(
+                f"Ошибка проверки админ-клиента на «{node.name}»: {exc}"
+            ) from exc
+
+        existing_obj = None
+        existing_inbound_ids: set[int] = set()
+
+        if get_resp.status_code == 200:
+            try:
+                get_data = get_resp.json()
+            except ValueError as exc:
+                raise XuiSyncError(
+                    f"Некорректный JSON от {get_url} на «{node.name}»"
+                ) from exc
+            if get_data.get("success") and isinstance(get_data.get("obj"), dict):
+                existing_obj = get_data["obj"]
+                raw_ids = existing_obj.get("inboundIds") or []
+                existing_inbound_ids = {int(i) for i in raw_ids}
+        elif get_resp.status_code != 404:
+            raise XuiSyncError(
+                f"Неожиданный статус {get_resp.status_code} от {get_url} на «{node.name}»"
+            )
+
+        if existing_obj is None:
+            admin_uuid = node.probe_xray_uuid or uuid.uuid4()
+            admin_uuid_str = str(admin_uuid)
+            add_url = f"{base_url}/panel/api/clients/add"
+            payload = {
+                "client": {
+                    "email": PROBE_ADMIN_EMAIL,
+                    "uuid": admin_uuid_str,
+                    "auth": admin_uuid_str,
+                    "flow": "xtls-rprx-vision",
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "limitIp": 0,
+                    "enable": True,
+                    "tgId": 0,
+                },
+                "inboundIds": target_inbound_ids,
+            }
+            try:
+                add_resp = client.post(add_url, headers=headers, json=payload)
+                add_resp.raise_for_status()
+                add_data = add_resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise XuiSyncError(
+                    f"Ошибка создания админ-клиента на «{node.name}»: {exc}"
+                ) from exc
+
+            if not add_data.get("success"):
+                raise XuiSyncError(
+                    f"3x-ui отклонила создание админ-клиента на «{node.name}»: "
+                    f"{add_data.get('msg', 'unknown')}"
+                )
+            return admin_uuid
+
+        current_client = existing_obj.get("client") or {}
+        panel_uuid_str = str(current_client.get("uuid") or "").strip()
+        try:
+            resolved_uuid = uuid.UUID(panel_uuid_str) if panel_uuid_str else (node.probe_xray_uuid or uuid.uuid4())
+        except ValueError:
+            resolved_uuid = node.probe_xray_uuid or uuid.uuid4()
+
+        # Если клиент есть, при необходимости обновляем flow/enable и допривязываем новые инбаунды
+        needs_update = (
+            not current_client.get("enable", True)
+            or current_client.get("flow") != "xtls-rprx-vision"
+            or (node.probe_xray_uuid and str(node.probe_xray_uuid) != panel_uuid_str)
+        )
+        if needs_update:
+            target_uuid_str = str(node.probe_xray_uuid or resolved_uuid)
+            resolved_uuid = uuid.UUID(target_uuid_str)
+            merged_client = dict(current_client)
+            merged_client.pop("id", None)
+            merged_client.pop("allowedIPs", None)
+            merged_client["email"] = PROBE_ADMIN_EMAIL
+            merged_client["uuid"] = target_uuid_str
+            merged_client["auth"] = target_uuid_str
+            merged_client["flow"] = "xtls-rprx-vision"
+            merged_client["enable"] = True
+            merged_client.setdefault("totalGB", 0)
+            merged_client.setdefault("expiryTime", 0)
+            merged_client.setdefault("limitIp", 0)
+            merged_client.setdefault("tgId", 0)
+
+            update_url = f"{base_url}/panel/api/clients/update/{email_q}"
+            try:
+                upd_resp = client.post(update_url, headers=headers, json=merged_client)
+                upd_resp.raise_for_status()
+                upd_data = upd_resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise XuiSyncError(
+                    f"Ошибка обновления админ-клиента на «{node.name}»: {exc}"
+                ) from exc
+
+            if not upd_data.get("success"):
+                raise XuiSyncError(
+                    f"3x-ui отклонила обновление админ-клиента на «{node.name}»: "
+                    f"{upd_data.get('msg', 'unknown')}"
+                )
+
+        missing_ids = [i for i in target_inbound_ids if i not in existing_inbound_ids]
+        if missing_ids:
+            attach_url = f"{base_url}/panel/api/clients/{email_q}/attach"
+            try:
+                att_resp = client.post(
+                    attach_url,
+                    headers=headers,
+                    json={"inboundIds": missing_ids},
+                )
+                att_resp.raise_for_status()
+                att_data = att_resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise XuiSyncError(
+                    f"Ошибка привязки админ-клиента на «{node.name}»: {exc}"
+                ) from exc
+
+            if not att_data.get("success"):
+                raise XuiSyncError(
+                    f"3x-ui отклонила attach админ-клиента на «{node.name}»: "
+                    f"{att_data.get('msg', 'unknown')}"
+                )
+
+        return resolved_uuid
+
+
 @transaction.atomic
 def sync_node_inbounds(node: VpnNode) -> SyncResult:
     raw_inbounds = fetch_xui_inbounds(node)
     result = SyncResult()
     seen_xui_ids: list[int] = []
+    enabled_xui_ids: list[int] = []
 
     for raw in raw_inbounds:
         parsed = parse_xui_inbound(node, raw)
@@ -263,6 +420,8 @@ def sync_node_inbounds(node: VpnNode) -> SyncResult:
 
         xui_id = parsed.pop("xui_inbound_id")
         seen_xui_ids.append(xui_id)
+        if parsed["is_enabled"]:
+            enabled_xui_ids.append(xui_id)
 
         existing = NodeInbound.objects.filter(node=node, xui_inbound_id=xui_id).first()
         if existing is None:
@@ -297,6 +456,17 @@ def sync_node_inbounds(node: VpnNode) -> SyncResult:
         stale_qs = stale_qs.exclude(xui_inbound_id__in=seen_xui_ids)
     result.disabled = stale_qs.update(is_enabled=False)
 
+    probe_ids = enabled_xui_ids or seen_xui_ids
+    if probe_ids:
+        resolved_uuid = ensure_probe_admin_client_on_panel(node, probe_ids)
+        if resolved_uuid and node.probe_xray_uuid != resolved_uuid:
+            node.probe_xray_uuid = resolved_uuid
+            node.save(update_fields=["probe_xray_uuid"])
+        if resolved_uuid:
+            result.probe_uuid = str(resolved_uuid)
+    elif node.probe_xray_uuid:
+        result.probe_uuid = str(node.probe_xray_uuid)
+
     return result
 
 
@@ -308,10 +478,6 @@ def sync_user_subscription_on_panel(
     total_gb_bytes: int = 0,
     timeout: float = 10.0,
 ) -> dict:
-    """
-    Создает или обновляет клиента в 3x-ui v3.x (/panel/api/clients/*)
-    с учетом срока действия, лимита трафика и статуса enable.
-    """
     base_url = _normalize_panel_base_url(node.panel_url)
     headers = _build_auth_headers(node)
     raw_inbounds = fetch_xui_inbounds(node, timeout=timeout)
@@ -397,7 +563,6 @@ def sync_user_subscription_on_panel(
                 )
             return {"added": len(target_inbound_ids), "existing": 0, "attached": 0, "updated": 0}
 
-        # Клиент существует: обновляем полную запись, сохраняя subId/tgId/flow/uuid
         current_client = existing_obj.get("client") or {}
         if not isinstance(current_client, dict):
             current_client = {}
@@ -507,10 +672,6 @@ def sync_user_subscription_on_all_panels(
 
 
 def ensure_user_on_panel(node: VpnNode, user, timeout: float = 10.0) -> dict:
-    """
-    Быстрое создание/допривязка клиента без изменения срока действия,
-    если клиент уже существует на панели.
-    """
     base_url = _normalize_panel_base_url(node.panel_url)
     headers = _build_auth_headers(node)
     raw_inbounds = fetch_xui_inbounds(node, timeout=timeout)

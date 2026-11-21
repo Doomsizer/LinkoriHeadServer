@@ -11,6 +11,12 @@ class OwnInboundResultSerializer(serializers.Serializer):
 
 class ProbeReportSerializer(serializers.Serializer):
     source = serializers.SlugField(max_length=64, required=False, default="")
+    network_type = serializers.ChoiceField(
+        choices=["lte", "wifi"],
+        required=False,
+        allow_null=True,
+        default=None,
+    )
     configs = serializers.ListField(
         child=serializers.CharField(max_length=4096, trim_whitespace=True),
         allow_empty=True,

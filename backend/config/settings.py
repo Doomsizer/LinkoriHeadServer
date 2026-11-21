@@ -112,6 +112,10 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = not DEBUG
 
+# Секретный путь админки задается в .env (DJANGO_ADMIN_PATH)
+_raw_admin_path = os.getenv("DJANGO_ADMIN_PATH", "admin").strip("/") or "admin"
+ADMIN_URL_PATH = f"{_raw_admin_path}/"
+
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -144,7 +148,7 @@ CELERY_BEAT_SCHEDULE = {
 
 # Шлюз подписок
 SUB_GATEWAY_HOST = os.getenv("SUB_GATEWAY_HOST", "sub.linkori.org").lower()
-SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori Proxy")
+SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori")
 SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
 SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/Linkorisupport")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
