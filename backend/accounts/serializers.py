@@ -18,7 +18,8 @@ class BotGetOrCreateUserSerializer(serializers.Serializer):
         default="",
     )
     is_legal_accepted = serializers.BooleanField(required=False, default=False)
-    sync_panels = serializers.BooleanField(required=False, default=True)
+    # Оставлено для обратной совместимости с телом запроса от бота, но без подписки панели не трогаются
+    sync_panels = serializers.BooleanField(required=False, default=False)
 
 
 class BotAcceptLegalSerializer(serializers.Serializer):

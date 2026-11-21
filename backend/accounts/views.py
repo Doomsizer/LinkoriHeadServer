@@ -13,7 +13,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from billing.services import get_active_subscription, serialize_subscription
-from nodes.xui_sync import ensure_user_on_all_panels
 
 from .models import User
 from .permissions import HasBotToken
@@ -47,9 +46,8 @@ def _serialize_web_user(user: User) -> dict:
 
 class BotGetOrCreateUserView(APIView):
     """
-    Ищет пользователя по telegram_id или создает нового с единым xray_uuid,
-    привязывает пригласившего по referred_by_code (при создании) и заводит
-    клиента на активных панелях 3x-ui.
+    Ищет пользователя по telegram_id или создает нового в БД Django с единым xray_uuid.
+    На панели 3x-ui пользователь при регистрации НЕ создается — только при появлении подписки.
     """
 
     authentication_classes = []
@@ -64,7 +62,6 @@ class BotGetOrCreateUserView(APIView):
         telegram_username = raw_username or str(telegram_id)
         ref_code = (serializer.validated_data.get("referred_by_code") or "").strip()
         is_legal_accepted = serializer.validated_data["is_legal_accepted"]
-        sync_panels = serializer.validated_data["sync_panels"]
 
         referrer = None
         if ref_code:
@@ -99,10 +96,6 @@ class BotGetOrCreateUserView(APIView):
         if update_fields:
             user.save(update_fields=update_fields)
 
-        panels_info = None
-        if sync_panels:
-            panels_info = ensure_user_on_all_panels(user)
-
         return Response(
             {
                 "created": created,
@@ -116,7 +109,6 @@ class BotGetOrCreateUserView(APIView):
                     "is_legal_accepted": user.is_legal_accepted,
                     "legal_accepted_at": _iso_utc(user.legal_accepted_at),
                 },
-                "panels": panels_info,
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
@@ -276,7 +268,7 @@ class TelegramAuthConfirmView(APIView):
         now = timezone.now()
 
         try:
-            user, created = User.objects.get_or_create(
+            user, _ = User.objects.get_or_create(
                 telegram_id=telegram_id,
                 defaults={
                     "username": f"tg_{telegram_id}",
@@ -287,7 +279,6 @@ class TelegramAuthConfirmView(APIView):
             )
         except IntegrityError:
             user = User.objects.get(telegram_id=telegram_id)
-            created = False
 
         update_fields: list[str] = []
         if user.telegram_username != telegram_username:
@@ -299,12 +290,6 @@ class TelegramAuthConfirmView(APIView):
             update_fields.extend(["is_legal_accepted", "legal_accepted_at"])
         if update_fields:
             user.save(update_fields=update_fields)
-
-        if created:
-            try:
-                ensure_user_on_all_panels(user)
-            except Exception:
-                pass
 
         cache.set(
             cache_key,

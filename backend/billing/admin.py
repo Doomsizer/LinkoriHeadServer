@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import Payment, Plan, ReferralReward, Subscription, SubscriptionDevice
+from .tasks import provision_subscription_to_panels
 
 
 @admin.register(Plan)
@@ -62,21 +63,34 @@ class SubscriptionAdmin(admin.ModelAdmin):
     inlines = (SubscriptionDeviceInline,)
     actions = ("mark_active", "mark_suspended", "mark_revoked")
 
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        provision_subscription_to_panels.delay(str(obj.id))
+
     @admin.display(description="Устройств")
     def devices_count(self, obj):
         return obj.devices.count()
 
     @admin.action(description="Активировать выбранные подписки")
     def mark_active(self, request, queryset):
+        ids = list(queryset.values_list("id", flat=True))
         queryset.update(status=Subscription.Status.ACTIVE)
+        for sub_id in ids:
+            provision_subscription_to_panels.delay(str(sub_id))
 
     @admin.action(description="Приостановить выбранные подписки")
     def mark_suspended(self, request, queryset):
+        ids = list(queryset.values_list("id", flat=True))
         queryset.update(status=Subscription.Status.SUSPENDED)
+        for sub_id in ids:
+            provision_subscription_to_panels.delay(str(sub_id))
 
     @admin.action(description="Отозвать выбранные подписки")
     def mark_revoked(self, request, queryset):
+        ids = list(queryset.values_list("id", flat=True))
         queryset.update(status=Subscription.Status.REVOKED)
+        for sub_id in ids:
+            provision_subscription_to_panels.delay(str(sub_id))
 
 
 @admin.register(SubscriptionDevice)
