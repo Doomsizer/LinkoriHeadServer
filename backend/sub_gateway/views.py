@@ -13,7 +13,7 @@ from billing.models import Subscription, SubscriptionDevice
 from nodes.models import NodeInbound
 from probes.models import WorkingPublicConfig
 
-from .uri_builder import build_subscription_payload
+from .uri_builder import build_happ_json_payload, build_subscription_payload
 
 HWID_REGEX = re.compile(r"^[a-zA-Z0-9=_-]{8,128}$")
 
@@ -48,6 +48,15 @@ def is_browser_request(request) -> bool:
     return False
 
 
+def is_happ_json_client(request, user_agent: str) -> bool:
+    fmt = request.GET.get("format", "").lower().strip()
+    if fmt == "uri":
+        return False
+    if fmt in ("xray", "json"):
+        return True
+    return "happ" in user_agent.lower()
+
+
 def build_subscription_headers(
     subscription: Subscription,
     network_type: str | None = None,
@@ -64,7 +73,8 @@ def build_subscription_headers(
         f"upload=0; download={subscription.traffic_used_bytes}; "
         f"total={subscription.traffic_limit_bytes}; expire={expire_ts}"
     )
-    return {
+
+    headers = {
         "profile-title": f"base64:{title_b64}",
         "profile-update-interval": str(settings.SUB_UPDATE_INTERVAL_HOURS),
         "subscription-userinfo": userinfo,
@@ -73,6 +83,16 @@ def build_subscription_headers(
         "profile-web-page-url": settings.SUB_WEB_URL,
         "x-hwid-active": "true",
     }
+
+    announce_text = getattr(settings, "SUB_ANNOUNCE_TEXT", "").strip()
+    if announce_text:
+        announce_b64 = base64.b64encode(announce_text.encode("utf-8")).decode("ascii")
+        headers["announce"] = f"base64:{announce_b64}"
+    announce_url = getattr(settings, "SUB_ANNOUNCE_URL", "").strip()
+    if announce_url:
+        headers["announce-url"] = announce_url
+
+    return headers
 
 
 def _uri_protocol_family(uri: str) -> str:
@@ -316,21 +336,28 @@ class SubscriptionGatewayView(View):
         inbounds = _select_live_inbounds(network_type=net)
         public_uris = _select_working_public_uris(network_type=net)
 
-        # 7. Собираем base64-подписку с «⚡ Лучший сервер» в начале
-        payload = build_subscription_payload(
-            subscription=subscription,
-            inbounds=inbounds,
-            device_os=device_os,
-            user_agent=user_agent,
-            network_type=net,
-            extra_uris=public_uris,
-        )
+        # 7. Для Happ отдаем Xray JSON с burstObservatory (автовыбор и автопереключение при падении),
+        #    для остальных клиентов — стандартный base64
+        if is_happ_json_client(request, user_agent):
+            payload = build_happ_json_payload(
+                subscription=subscription,
+                inbounds=inbounds,
+                network_type=net,
+                extra_uris=public_uris,
+            )
+            content_type = "application/json; charset=utf-8"
+        else:
+            payload = build_subscription_payload(
+                subscription=subscription,
+                inbounds=inbounds,
+                device_os=device_os,
+                user_agent=user_agent,
+                network_type=net,
+                extra_uris=public_uris,
+            )
+            content_type = "text/plain; charset=utf-8"
 
-        response = HttpResponse(
-            payload,
-            content_type="text/plain; charset=utf-8",
-            status=200,
-        )
+        response = HttpResponse(payload, content_type=content_type, status=200)
         for header_name, header_value in build_subscription_headers(
             subscription, network_type=net
         ).items():

@@ -152,6 +152,8 @@ SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori")
 SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
 SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/Linkorisupport")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
+SUB_ANNOUNCE_TEXT = os.getenv("SUB_ANNOUNCE_TEXT", "Сайт: linkori.org | Бот: @linkoribot")
+SUB_ANNOUNCE_URL = os.getenv("SUB_ANNOUNCE_URL", "https://t.me/linkoribot")
 
 # Токены внутренних интеграций и Telegram-бот
 PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
