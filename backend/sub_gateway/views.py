@@ -25,6 +25,7 @@ HWID_REGEX = re.compile(r"^[a-zA-Z0-9=_-]{8,128}$")
 
 MAX_ITEMS_PER_NETWORK_SUB = 30
 MAX_ITEMS_GENERAL_SUB = 40
+TAIL_EXTRA_COUNTRIES_COUNT = 5
 
 DEEPLINK_SCHEMES = {
     "happ": ("Happ", "happ://add/{sub_url}"),
@@ -156,6 +157,60 @@ def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
     return inbounds
 
 
+def _pick_diverse(
+    items: list[dict],
+    limit: int,
+    prefer_distinct_tiers: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    if limit <= 0 or not items:
+        return [], list(items)
+
+    remaining = list(items)
+    chosen_list: list[dict] = []
+    origin_counts: Counter[str] = Counter()
+    proto_counts: Counter[str] = Counter()
+    country_counts: Counter[str] = Counter()
+    tier_counts: Counter[int] = Counter()
+
+    while remaining and len(chosen_list) < limit:
+        best_idx = 0
+        best_score = None
+        for idx, item in enumerate(remaining):
+            is_unknown_country = 1 if item["country_code"] == "ZZ" else 0
+            if prefer_distinct_tiers:
+                score = (
+                    is_unknown_country,
+                    country_counts[item["country_code"]],
+                    tier_counts[item["tier"]],
+                    origin_counts[item["origin"]],
+                    proto_counts[item["proto"]],
+                    item["latency"],
+                    item["id"],
+                )
+            else:
+                score = (
+                    is_unknown_country,
+                    country_counts[item["country_code"]],
+                    origin_counts[item["origin"]],
+                    proto_counts[item["proto"]],
+                    item["country_prio"],
+                    item["latency"],
+                    item["id"],
+                )
+            if best_score is None or score < best_score:
+                best_score = score
+                best_idx = idx
+
+        chosen = remaining.pop(best_idx)
+        chosen_list.append(chosen)
+        origin_counts[chosen["origin"]] += 1
+        proto_counts[chosen["proto"]] += 1
+        country_counts[chosen["country_code"]] += 1
+        tier_counts[chosen["tier"]] += 1
+
+    return chosen_list, remaining
+
+
 def _select_working_public_uris(network_type: str | None, quota: int) -> list[str]:
     if quota <= 0:
         return []
@@ -206,38 +261,43 @@ def _select_working_public_uris(network_type: str | None, quota: int) -> list[st
     if not pool:
         return []
 
-    # Фаза 1: жадный отбор с балансировкой по источникам, протоколам и странам внутри тиров
-    selected: list[dict] = []
-    origin_counts: Counter[str] = Counter()
-    proto_counts: Counter[str] = Counter()
-    country_counts: Counter[str] = Counter()
+    # Разделяем на основные 5 стран (NL, DE, SE, FI, LV) и прочие ("левые") страны для хвоста
+    core_pool = [item for item in pool if item["tier"] == 0]
+    extra_pool = [item for item in pool if item["tier"] > 0]
 
-    remaining = pool
-    while remaining and len(selected) < quota:
-        best_idx = 0
-        best_score = None
-        for idx, item in enumerate(remaining):
-            score = (
-                item["tier"],
-                origin_counts[item["origin"]],
-                proto_counts[item["proto"]],
-                country_counts[item["country_code"]],
-                item["country_prio"],
-                item["latency"],
-                item["id"],
-            )
-            if best_score is None or score < best_score:
-                best_score = score
-                best_idx = idx
+    # Резервируем до 5 слотов в конце под 5 разных прочих стран
+    desired_extra = min(
+        TAIL_EXTRA_COUNTRIES_COUNT if quota >= 15 else max(1, quota // 3),
+        len(extra_pool),
+    )
+    extra_selected, extra_leftover = _pick_diverse(
+        extra_pool,
+        limit=desired_extra,
+        prefer_distinct_tiers=True,
+    )
 
-        chosen = remaining.pop(best_idx)
-        selected.append(chosen)
-        origin_counts[chosen["origin"]] += 1
-        proto_counts[chosen["proto"]] += 1
-        country_counts[chosen["country_code"]] += 1
+    core_quota = max(0, quota - len(extra_selected))
+    core_selected, _ = _pick_diverse(
+        core_pool,
+        limit=core_quota,
+        prefer_distinct_tiers=False,
+    )
 
-    # Фаза 2: итоговая аккуратная сортировка по странам (NL -> DE -> SE -> FI -> LV -> прочие -> дальние)
-    selected.sort(
+    # Если основных стран оказалось меньше, чем свободных слотов — добираем из оставшихся прочих
+    remaining_slots = quota - len(core_selected) - len(extra_selected)
+    if remaining_slots > 0 and extra_leftover:
+        extra_topup, _ = _pick_diverse(
+            extra_leftover,
+            limit=remaining_slots,
+            prefer_distinct_tiers=True,
+        )
+        extra_selected.extend(extra_topup)
+
+    # Итоговая сортировка: сначала основные (NL -> DE -> SE -> FI -> LV), затем прочие в конце
+    core_selected.sort(
+        key=lambda x: (x["country_prio"], x["country_code"], x["proto"], x["latency"], x["id"])
+    )
+    extra_selected.sort(
         key=lambda x: (
             x["tier"],
             x["country_prio"],
@@ -247,7 +307,8 @@ def _select_working_public_uris(network_type: str | None, quota: int) -> list[st
             x["id"],
         )
     )
-    return [item["uri"] for item in selected]
+
+    return [item["uri"] for item in core_selected] + [item["uri"] for item in extra_selected]
 
 
 class SubscriptionOpenAppView(View):
