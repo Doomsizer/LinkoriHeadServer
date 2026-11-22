@@ -52,16 +52,18 @@ class WorkingPublicConfigAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "source",
+        "country_code",
         "protocol",
+        "origin_source",
+        "latency_ms",
         "is_active",
         "short_uri",
-        "first_seen_at",
         "last_seen_at",
     )
-    list_filter = ("source", "is_active", "protocol", "last_seen_at")
-    search_fields = ("uri", "uri_hash", "source")
+    list_filter = ("source", "is_active", "country_code", "protocol", "origin_source")
+    search_fields = ("uri", "uri_hash", "source", "origin_source", "country_code")
     readonly_fields = ("uri_hash", "first_seen_at", "last_seen_at")
 
     @admin.display(description="URI")
     def short_uri(self, obj):
-        return f"{obj.uri[:72]}..." if len(obj.uri) > 72 else obj.uri
+        return f"{obj.uri[:64]}..." if len(obj.uri) > 64 else obj.uri

@@ -1,5 +1,6 @@
 import base64
 import re
+from collections import Counter
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -11,11 +12,19 @@ from django.views import View
 
 from billing.models import Subscription, SubscriptionDevice
 from nodes.models import NodeInbound
+from probes.country_utils import (
+    detect_country_code,
+    extract_origin_bucket,
+    get_country_rank,
+)
 from probes.models import WorkingPublicConfig
 
 from .uri_builder import build_happ_json_payload, build_subscription_payload
 
 HWID_REGEX = re.compile(r"^[a-zA-Z0-9=_-]{8,128}$")
+
+MAX_ITEMS_PER_NETWORK_SUB = 30
+MAX_ITEMS_GENERAL_SUB = 40
 
 DEEPLINK_SCHEMES = {
     "happ": ("Happ", "happ://add/{sub_url}"),
@@ -121,17 +130,36 @@ def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
     live_statuses = [NodeInbound.HealthStatus.ONLINE, NodeInbound.HealthStatus.DEGRADED]
 
     if network_type == "lte":
-        return list(
-            base_qs.filter(lte_health_status__in=live_statuses).order_by("node__priority", "id")
+        inbounds = list(base_qs.filter(lte_health_status__in=live_statuses))
+    elif network_type == "wifi":
+        inbounds = list(base_qs.filter(wifi_health_status__in=live_statuses))
+    else:
+        inbounds = list(base_qs.filter(health_status__in=live_statuses))
+
+    def inbound_sort_key(inb: NodeInbound):
+        tier, c_prio, c_code = get_country_rank(inb.node.country_code)
+        lat = (
+            inb.lte_latency_ms
+            if network_type == "lte"
+            else (inb.wifi_latency_ms if network_type == "wifi" else inb.last_latency_ms)
         )
-    if network_type == "wifi":
-        return list(
-            base_qs.filter(wifi_health_status__in=live_statuses).order_by("node__priority", "id")
+        return (
+            tier,
+            c_prio,
+            c_code,
+            inb.node.priority,
+            lat if lat is not None else 10**9,
+            inb.id,
         )
-    return list(base_qs.filter(health_status__in=live_statuses).order_by("node__priority", "id"))
+
+    inbounds.sort(key=inbound_sort_key)
+    return inbounds
 
 
-def _select_working_public_uris(network_type: str | None) -> list[str]:
+def _select_working_public_uris(network_type: str | None, quota: int) -> list[str]:
+    if quota <= 0:
+        return []
+
     own_endpoint_keys: set[tuple[str, str, int]] = set()
     for inb in NodeInbound.objects.select_related("node").filter(
         is_enabled=True,
@@ -147,19 +175,79 @@ def _select_working_public_uris(network_type: str | None) -> list[str]:
     elif network_type == "wifi":
         qs = qs.filter(source="wifi")
 
-    seen_hashes: set[str] = set()
-    uris: list[str] = []
+    candidates_by_hash: dict[str, dict] = {}
     for cfg in qs:
-        if cfg.uri_hash in seen_hashes:
-            continue
         parsed = urlparse(cfg.uri)
         if parsed.hostname and parsed.port:
             ep = (_uri_protocol_family(cfg.uri), parsed.hostname.lower(), int(parsed.port))
             if ep in own_endpoint_keys:
                 continue
-        seen_hashes.add(cfg.uri_hash)
-        uris.append(cfg.uri)
-    return uris
+
+        cc = (cfg.country_code or "").upper().strip() or detect_country_code(cfg.uri)
+        tier, c_prio, c_code = get_country_rank(cc)
+        proto_fam = _uri_protocol_family(cfg.uri)
+        origin_key = extract_origin_bucket(cfg.origin_source, cfg.uri)
+        lat = cfg.latency_ms if cfg.latency_ms is not None else 10**9
+
+        prev = candidates_by_hash.get(cfg.uri_hash)
+        if prev is None or (origin_key != "unknown" and prev["origin"] == "unknown") or lat < prev["latency"]:
+            candidates_by_hash[cfg.uri_hash] = {
+                "id": cfg.id,
+                "uri": cfg.uri,
+                "tier": tier,
+                "country_prio": c_prio,
+                "country_code": c_code,
+                "proto": proto_fam,
+                "origin": origin_key,
+                "latency": lat,
+            }
+
+    pool = list(candidates_by_hash.values())
+    if not pool:
+        return []
+
+    # Фаза 1: жадный отбор с балансировкой по источникам, протоколам и странам внутри тиров
+    selected: list[dict] = []
+    origin_counts: Counter[str] = Counter()
+    proto_counts: Counter[str] = Counter()
+    country_counts: Counter[str] = Counter()
+
+    remaining = pool
+    while remaining and len(selected) < quota:
+        best_idx = 0
+        best_score = None
+        for idx, item in enumerate(remaining):
+            score = (
+                item["tier"],
+                origin_counts[item["origin"]],
+                proto_counts[item["proto"]],
+                country_counts[item["country_code"]],
+                item["country_prio"],
+                item["latency"],
+                item["id"],
+            )
+            if best_score is None or score < best_score:
+                best_score = score
+                best_idx = idx
+
+        chosen = remaining.pop(best_idx)
+        selected.append(chosen)
+        origin_counts[chosen["origin"]] += 1
+        proto_counts[chosen["proto"]] += 1
+        country_counts[chosen["country_code"]] += 1
+
+    # Фаза 2: итоговая аккуратная сортировка по странам (NL -> DE -> SE -> FI -> LV -> прочие -> дальние)
+    selected.sort(
+        key=lambda x: (
+            x["tier"],
+            x["country_prio"],
+            x["country_code"],
+            x["proto"],
+            x["latency"],
+            x["id"],
+        )
+    )
+    return [item["uri"] for item in selected]
 
 
 class SubscriptionOpenAppView(View):
@@ -332,12 +420,15 @@ class SubscriptionGatewayView(View):
                     last_ip=client_ip,
                 )
 
-        # 6. Собираем наши живые инбаунды + рабочие внешние конфиги стенда
-        inbounds = _select_live_inbounds(network_type=net)
-        public_uris = _select_working_public_uris(network_type=net)
+        # 6. Лимит: 30 для LTE/Wi-Fi и 40 для общей подписки (с учетом 1 слота под «⚡ Лучший сервер»)
+        max_items = MAX_ITEMS_PER_NETWORK_SUB if net in ("lte", "wifi") else MAX_ITEMS_GENERAL_SUB
+        max_real_servers = max_items - 1
 
-        # 7. Для Happ отдаем Xray JSON с burstObservatory (автовыбор и автопереключение при падении),
-        #    для остальных клиентов — стандартный base64
+        inbounds = _select_live_inbounds(network_type=net)[:max_real_servers]
+        public_quota = max(0, max_real_servers - len(inbounds))
+        public_uris = _select_working_public_uris(network_type=net, quota=public_quota)
+
+        # 7. Для Happ — Xray JSON с burstObservatory (автопереключение), остальным — base64
         if is_happ_json_client(request, user_agent):
             payload = build_happ_json_payload(
                 subscription=subscription,

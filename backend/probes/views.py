@@ -115,11 +115,6 @@ def _apply_inbound_probe_result(
 
 
 class ProbeNodesListView(APIView):
-    """
-    Единый эндпоинт для любого стенда (LTE или Wi-Fi): всегда отдает все
-    включенные инбаунды с админским Xray UUID (приоритетно node.probe_xray_uuid).
-    """
-
     authentication_classes = []
     permission_classes = [HasProbeToken]
 
@@ -197,9 +192,7 @@ class ProbeNodesListView(APIView):
 
 class ProbeReportView(APIView):
     """
-    Принимает рабочие ссылки от стенда.
-    - Наши собственные инбаунды в configs автоматически обновляют lte_health_status/wifi_health_status.
-    - Внешние/публичные рабочие конфиги сохраняются в WorkingPublicConfig (без дублирования наших нод).
+    Принимает рабочие ссылки от стенда (строками или объектами {uri, source, latency_ms}).
     """
 
     authentication_classes = []
@@ -216,7 +209,8 @@ class ProbeReportView(APIView):
         raw_source = serializer.validated_data.get("source", "").strip()
         source = raw_source or resolved_net or "default"
 
-        all_configs = sorted(serializer.validated_data["configs"])
+        normalized_items = serializer.validated_data["normalized_configs"]
+        all_configs = sorted(item["uri"] for item in normalized_items)
         own_results = serializer.validated_data.get("own_results", [])
         sync_own = serializer.validated_data.get("sync_own", True)
 
@@ -229,15 +223,19 @@ class ProbeReportView(APIView):
             own_endpoint_keys.add((fam, inb.connect_host.lower(), int(inb.connect_port)))
             own_endpoint_keys.add((fam, str(inb.node.ip_address).lower(), int(inb.connect_port)))
 
-        # Отделяем внешние/публичные конфиги от наших собственных нод (чтобы не отдавать тестовый UUID юзерам)
-        public_configs: list[str] = []
+        public_items: list[dict] = []
         working_own_endpoints: set[tuple[str, str, int]] = set()
-        for uri in all_configs:
+        own_latencies_by_ep: dict[tuple[str, str, int], int] = {}
+
+        for item in normalized_items:
+            uri = item["uri"]
             ep = _extract_uri_endpoint(uri)
             if ep is not None and ep in own_endpoint_keys:
                 working_own_endpoints.add(ep)
+                if item["latency_ms"] is not None:
+                    own_latencies_by_ep[ep] = item["latency_ms"]
             else:
-                public_configs.append(uri)
+                public_items.append(item)
 
         config_hash = hashlib.sha256("\n".join(all_configs).encode("utf-8")).hexdigest()
         now = timezone.now()
@@ -278,8 +276,7 @@ class ProbeReportView(APIView):
                 changed = True
                 snapshot_id = snapshot.id
 
-            # Синхронизируем таблицу WorkingPublicConfig строго с текущим списком внешних рабочих конфигов
-            public_hashes = {hash_uri(u) for u in public_configs}
+            public_hashes = {hash_uri(item["uri"]) for item in public_items}
             existing_public = {
                 obj.uri_hash: obj
                 for obj in WorkingPublicConfig.objects.filter(source=source)
@@ -298,22 +295,32 @@ class ProbeReportView(APIView):
 
             to_create = []
             to_update = []
-            for uri in public_configs:
+            for item in public_items:
+                uri = item["uri"]
                 u_hash = hash_uri(uri)
+                scheme = uri.split("://", 1)[0].lower()[:24]
                 obj = existing_public.get(u_hash)
                 if obj is None:
-                    scheme = uri.split("://", 1)[0].lower()[:24]
                     to_create.append(
                         WorkingPublicConfig(
                             source=source,
+                            origin_source=item["origin_source"],
+                            country_code=item["country_code"],
                             uri=uri,
                             uri_hash=u_hash,
                             protocol=scheme,
+                            latency_ms=item["latency_ms"],
                             is_active=True,
                         )
                     )
                 else:
                     obj.uri = uri
+                    if item["origin_source"]:
+                        obj.origin_source = item["origin_source"]
+                    if item["country_code"]:
+                        obj.country_code = item["country_code"]
+                    if item["latency_ms"] is not None:
+                        obj.latency_ms = item["latency_ms"]
                     obj.is_active = True
                     obj.last_seen_at = now
                     to_update.append(obj)
@@ -323,7 +330,14 @@ class ProbeReportView(APIView):
             if to_update:
                 WorkingPublicConfig.objects.bulk_update(
                     to_update,
-                    fields=["uri", "is_active", "last_seen_at"],
+                    fields=[
+                        "uri",
+                        "origin_source",
+                        "country_code",
+                        "latency_ms",
+                        "is_active",
+                        "last_seen_at",
+                    ],
                 )
 
             updated_own_count = 0
@@ -347,11 +361,12 @@ class ProbeReportView(APIView):
                     key_host = (fam, inb.connect_host.lower(), int(inb.connect_port))
                     key_ip = (fam, str(inb.node.ip_address).lower(), int(inb.connect_port))
                     is_alive = key_host in working_own_endpoints or key_ip in working_own_endpoints
+                    lat = own_latencies_by_ep.get(key_host) or own_latencies_by_ep.get(key_ip)
                     _apply_inbound_probe_result(
                         inbound=inb,
                         network_type=resolved_net,
                         is_alive=is_alive,
-                        latency_ms=None,
+                        latency_ms=lat,
                         now=now,
                         keep_existing_latency=True,
                     )
@@ -365,7 +380,7 @@ class ProbeReportView(APIView):
                 "snapshot_id": snapshot_id,
                 "changed": changed,
                 "active_count": len(all_configs),
-                "public_active_count": len(public_configs),
+                "public_active_count": len(public_items),
                 "added_count": len(added),
                 "removed_count": len(removed),
                 "added": added,
@@ -377,10 +392,6 @@ class ProbeReportView(APIView):
 
 
 class ProbeActiveConfigsView(APIView):
-    """
-    Возвращает рабочие публичные конфиги (?source=lte|wifi, ?format=json|plain|base64).
-    """
-
     authentication_classes = []
     permission_classes = [HasProbeToken]
 

@@ -3,6 +3,8 @@ import secrets
 
 from django.db import models
 
+from .country_utils import detect_country_code
+
 
 def hash_uri(uri: str) -> str:
     return hashlib.sha256(uri.encode("utf-8")).hexdigest()
@@ -61,7 +63,7 @@ class ProbeSnapshot(models.Model):
         max_length=64,
         default="default",
         db_index=True,
-        verbose_name="Источник (стенд)",
+        verbose_name="Сеть / стенд",
     )
     config_hash = models.CharField(
         max_length=64,
@@ -94,7 +96,21 @@ class WorkingPublicConfig(models.Model):
         max_length=64,
         default="default",
         db_index=True,
-        verbose_name="Источник (стенд)",
+        verbose_name="Сеть (lte/wifi)",
+    )
+    origin_source = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Источник конфига",
+    )
+    country_code = models.CharField(
+        max_length=8,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Код страны",
     )
     uri = models.TextField(verbose_name="Ссылка конфига")
     uri_hash = models.CharField(max_length=64, db_index=True, verbose_name="SHA-256 ссылки")
@@ -104,6 +120,11 @@ class WorkingPublicConfig(models.Model):
         default="",
         db_index=True,
         verbose_name="Протокол",
+    )
+    latency_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name="Задержка (мс)",
     )
     is_active = models.BooleanField(default=True, db_index=True, verbose_name="Работает")
     first_seen_at = models.DateTimeField(auto_now_add=True, verbose_name="Впервые найден")
@@ -125,8 +146,11 @@ class WorkingPublicConfig(models.Model):
             self.uri_hash = hash_uri(self.uri)
         if not self.protocol and "://" in self.uri:
             self.protocol = self.uri.split("://", 1)[0].lower()[:24]
+        if not self.country_code:
+            self.country_code = detect_country_code(self.uri)
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         state = "OK" if self.is_active else "DEAD"
-        return f"[{state}] {self.protocol} | {self.uri[:48]}"
+        cc = self.country_code or "??"
+        return f"[{state}] {cc} | {self.protocol} | {self.uri[:44]}"
