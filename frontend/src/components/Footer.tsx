@@ -63,11 +63,8 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-8 flex flex-col items-start justify-between gap-3 border-t border-[#8b5cf6]/15 pt-6 text-xs text-[#7e75ad] sm:flex-row sm:items-center">
+        <div className="mt-8 border-t border-[#8b5cf6]/15 pt-6 text-xs text-[#7e75ad]">
           <span>© 2026 Linkori. Все права защищены.</span>
-          <span className="rounded-lg border border-[#8b5cf6]/25 bg-[#160e31] px-2.5 py-0.5 font-mono text-[#9e96cc]">
-            ОPLAT
-          </span>
         </div>
       </div>
     </footer>

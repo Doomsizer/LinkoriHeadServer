@@ -7,6 +7,7 @@ export interface PublicPlan {
   price_kopeks: number;
   max_devices: number;
   traffic_limit_gb: number | null;
+  is_trial: boolean;
 }
 
 export interface LegalDocumentItem {
@@ -34,6 +35,7 @@ const FALLBACK_PLANS: PublicPlan[] = [
     price_kopeks: 29900,
     max_devices: 10,
     traffic_limit_gb: null,
+    is_trial: false,
   },
   {
     id: 2,
@@ -44,6 +46,7 @@ const FALLBACK_PLANS: PublicPlan[] = [
     price_kopeks: 79900,
     max_devices: 10,
     traffic_limit_gb: null,
+    is_trial: false,
   },
   {
     id: 3,
@@ -54,6 +57,7 @@ const FALLBACK_PLANS: PublicPlan[] = [
     price_kopeks: 249000,
     max_devices: 10,
     traffic_limit_gb: null,
+    is_trial: false,
   },
 ];
 

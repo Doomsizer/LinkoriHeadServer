@@ -1,8 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import type { PublicPlan } from "@/lib/api";
+import { hasLocalLegalConsent } from "@/lib/consent";
+
+interface MeUser {
+  id: number;
+  telegram_id: number | null;
+  telegram_username: string;
+  email: string | null;
+  has_used_trial: boolean;
+}
+
+function getCookie(name: string): string {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : "";
+}
 
 function formatRub(kopeks: number): string {
   const rub = kopeks / 100;
@@ -22,27 +36,58 @@ function formatDurationLabel(days: number): string {
     if (m >= 2 && m <= 4) return `${m} месяца`;
     return `${m} месяцев`;
   }
+  if (days === 1) return "1 день";
+  if (days >= 2 && days <= 4) return `${days} дня`;
   return `${days} дн.`;
 }
 
 export function PricingSection({ plans }: { plans: PublicPlan[] }) {
+  const [meUser, setMeUser] = useState<MeUser | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<PublicPlan | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"sbp" | "crypto">("sbp");
+
+  // Если не авторизован — быстрый Email OTP прямо в окне оплаты
   const [email, setEmail] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(true);
+
   const [loading, setLoading] = useState(false);
-  const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const sortedByDuration = [...plans].sort((a, b) => a.duration_days - b.duration_days);
-  const basePlan = sortedByDuration[0];
+  async function refreshSession() {
+    try {
+      const res = await fetch("/api/accounts/me/", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setMeUser(data.user || null);
+      } else {
+        setMeUser(null);
+      }
+    } catch {
+      setMeUser(null);
+    }
+  }
+
+  useEffect(() => {
+    refreshSession();
+    window.addEventListener("linkori-auth-changed", refreshSession);
+    return () => window.removeEventListener("linkori-auth-changed", refreshSession);
+  }, []);
+
+  const trialPlans = plans.filter((p) => p.is_trial);
+  const regularPlans = plans.filter((p) => !p.is_trial);
+
+  const sortedRegular = [...regularPlans].sort((a, b) => a.duration_days - b.duration_days);
+  const basePlan = sortedRegular[0];
   const baseMonthlyKopeks = basePlan
     ? basePlan.price_kopeks / getEffectiveMonths(basePlan.duration_days)
     : 0;
 
   let bestPlanId: number | null = null;
-  if (plans.length > 1) {
+  if (regularPlans.length > 1) {
     let minMonthly = Infinity;
-    for (const p of plans) {
+    for (const p of regularPlans) {
       const mPrice = p.price_kopeks / getEffectiveMonths(p.duration_days);
       if (mPrice < minMonthly) {
         minMonthly = mPrice;
@@ -53,46 +98,109 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
 
   function openCheckout(plan: PublicPlan) {
     setSelectedPlan(plan);
-    setResultMessage(null);
+    setPaymentMethod("sbp");
     setErrorMessage(null);
+    setOtpSent(false);
+    setOtpCode("");
+    setEmail(meUser?.email || "");
   }
 
   function closeCheckout() {
     setSelectedPlan(null);
-    setResultMessage(null);
     setErrorMessage(null);
     setLoading(false);
   }
 
-  async function handleCheckoutSubmit(e: FormEvent) {
+  async function handleRequestOtp(e: FormEvent) {
+    e.preventDefault();
+    if (!acceptedTerms) {
+      setErrorMessage("Необходимо принять Пользовательское соглашение и Политику конфиденциальности.");
+      return;
+    }
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch("/api/accounts/email-auth/request/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.detail || "Не удалось отправить код.");
+        return;
+      }
+      setOtpSent(true);
+    } catch {
+      setErrorMessage("Ошибка соединения с сервером.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtpAndContinue(e: FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch("/api/accounts/email-auth/verify/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          email: email.trim(),
+          code: otpCode.trim(),
+          accepted_legal: hasLocalLegalConsent() || acceptedTerms,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.detail || "Неверный код подтверждения.");
+        return;
+      }
+      setMeUser(data.user);
+      window.dispatchEvent(new Event("linkori-auth-changed"));
+      setOtpSent(false);
+    } catch {
+      setErrorMessage("Ошибка соединения с сервером.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePaySubmit(e: FormEvent) {
     e.preventDefault();
     if (!selectedPlan) return;
 
     setLoading(true);
     setErrorMessage(null);
-    setResultMessage(null);
 
     try {
-      const res = await fetch("/api/billing/checkout-preview/", {
+      const res = await fetch("/api/billing/web/checkout/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCookie("csrftoken"),
+        },
         body: JSON.stringify({
           plan_id: selectedPlan.id,
-          email: email.trim(),
-          accepted_terms: acceptedTerms,
+          payment_method: selectedPlan.is_trial ? "sbp" : paymentMethod,
+          email: meUser?.email ? "" : email.trim(),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setErrorMessage(data.detail || "Не удалось оформить заказ. Проверьте введенные данные.");
+        setErrorMessage(data.detail || "Не удалось создать счет на оплату.");
+        return;
+      }
+      if (data.payment_url) {
+        window.location.href = data.payment_url;
       } else {
-        setResultMessage(
-          data.message ||
-            "Оплата временно недоступна: платежная система находится на этапе подключения."
-        );
+        setErrorMessage("Платежный шлюз не вернул ссылку на оплату.");
       }
     } catch {
-      setErrorMessage("Оплата временно недоступна. Попробуйте чуть позже.");
+      setErrorMessage("Ошибка соединения с сервером.");
     } finally {
       setLoading(false);
     }
@@ -104,8 +212,49 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
         Тарифы доступа
       </h2>
 
+      {trialPlans.length > 0 && (
+        <div className="mb-8 space-y-4">
+          {trialPlans.map((trial) => {
+            const used = Boolean(meUser?.has_used_trial);
+            return (
+              <div
+                key={trial.id}
+                className="flex flex-col items-start justify-between gap-4 rounded-[22px] border border-[#f472b6]/40 bg-gradient-to-r from-[#23123c] to-[#160e31] p-6 shadow-[0_18px_45px_-15px_rgba(6,3,20,0.9)] sm:flex-row sm:items-center"
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="rounded-lg border border-[#f472b6]/45 bg-[#f472b6]/15 px-2.5 py-1 text-xs font-bold text-[#fbcfe8]">
+                      Пробный период • {formatDurationLabel(trial.duration_days)}
+                    </span>
+                    <span className="text-xs text-[#9e96cc]">
+                      Только СБП • 1 раз для новых пользователей
+                    </span>
+                  </div>
+                  <h3 className="mt-2.5 text-xl font-bold text-[#efeaff]">
+                    {trial.name} —{" "}
+                    <span className="text-[#7ae9eb]">{formatRub(trial.price_kopeks)}</span>
+                  </h3>
+                  {trial.description && (
+                    <p className="mt-1 text-sm text-[#9e96cc]">{trial.description}</p>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={used}
+                  onClick={() => openCheckout(trial)}
+                  className="shrink-0 rounded-[14px] bg-[#7ae9eb] px-6 py-3 text-sm font-bold text-[#120b28] shadow-[0_0_24px_-6px_rgba(122,233,235,0.55)] transition hover:bg-[#9ef1f3] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {used ? "Пробный период использован" : `Попробовать за ${formatRub(trial.price_kopeks)}`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="grid gap-6 md:grid-cols-3">
-        {plans.map((plan) => {
+        {regularPlans.map((plan) => {
           const isBestValue = plan.id === bestPlanId;
           const months = getEffectiveMonths(plan.duration_days);
           const monthlyKopeks = plan.price_kopeks / months;
@@ -206,80 +355,186 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
               </button>
             </div>
 
-            <form onSubmit={handleCheckoutSubmit} className="mt-5 space-y-4">
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-[#d8d0ff]">
-                  Email для чека и уведомлений *
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full rounded-[14px] border border-[#8b5cf6]/30 bg-[#0d0720] px-3.5 py-2.5 text-sm text-[#efeaff] placeholder-[#7e75ad] focus:border-[#7ae9eb] focus:outline-none"
-                />
-              </div>
+            {!meUser ? (
+              <div className="mt-5 space-y-4">
+                <div className="rounded-[14px] border border-[#8b5cf6]/25 bg-[#0d0720] p-3.5 text-xs leading-relaxed text-[#d8d0ff]">
+                  Подтвердите Email (придет 6-значный код) или войдите через Telegram, чтобы доступ
+                  привязался к вашему кабинету.
+                </div>
 
-              <label className="flex items-start gap-2.5 text-xs leading-relaxed text-[#9e96cc]">
-                <input
-                  type="checkbox"
-                  checked={acceptedTerms}
-                  onChange={(e) => setAcceptedTerms(e.target.checked)}
-                  className="mt-0.5 rounded border-[#8b5cf6]/40 bg-[#0d0720] accent-[#7ae9eb]"
-                />
-                <span>
-                  Я принимаю{" "}
+                {!otpSent ? (
+                  <form onSubmit={handleRequestOtp} className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[#d8d0ff]">
+                        Email для входа и чека *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="name@gmail.com"
+                        className="w-full rounded-[14px] border border-[#8b5cf6]/30 bg-[#0d0720] px-3.5 py-2.5 text-sm text-[#efeaff] placeholder-[#7e75ad] focus:border-[#7ae9eb] focus:outline-none"
+                      />
+                    </div>
+
+                    <label className="flex items-start gap-2.5 text-xs leading-relaxed text-[#9e96cc]">
+                      <input
+                        type="checkbox"
+                        checked={acceptedTerms}
+                        onChange={(e) => setAcceptedTerms(e.target.checked)}
+                        className="mt-0.5 rounded border-[#8b5cf6]/40 bg-[#0d0720] accent-[#7ae9eb]"
+                      />
+                      <span>
+                        Я принимаю{" "}
+                        <Link href="/terms" className="text-[#7ae9eb] underline" onClick={closeCheckout}>
+                          Пользовательское соглашение
+                        </Link>{" "}
+                        и{" "}
+                        <Link href="/privacy" className="text-[#7ae9eb] underline" onClick={closeCheckout}>
+                          Политику конфиденциальности
+                        </Link>
+                        .
+                      </span>
+                    </label>
+
+                    {errorMessage && (
+                      <div className="rounded-[14px] border border-[#ec5f49]/40 bg-[#2d1020] p-3 text-xs text-[#ff9a8a]">
+                        {errorMessage}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full rounded-[14px] bg-[#7ae9eb] px-4 py-2.5 text-sm font-bold text-[#120b28] transition hover:bg-[#9ef1f3] disabled:opacity-60"
+                    >
+                      {loading ? "Отправка..." : "Отправить код на почту"}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyOtpAndContinue} className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[#d8d0ff]">
+                        Введите код из письма ({email})
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        required
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value)}
+                        placeholder="123456"
+                        className="w-full rounded-[14px] border border-[#8b5cf6]/30 bg-[#0d0720] px-3.5 py-2.5 text-center font-mono text-lg tracking-widest text-[#efeaff] focus:border-[#7ae9eb] focus:outline-none"
+                      />
+                    </div>
+
+                    {errorMessage && (
+                      <div className="rounded-[14px] border border-[#ec5f49]/40 bg-[#2d1020] p-3 text-xs text-[#ff9a8a]">
+                        {errorMessage}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full rounded-[14px] bg-[#7ae9eb] px-4 py-2.5 text-sm font-bold text-[#120b28] transition hover:bg-[#9ef1f3] disabled:opacity-60"
+                    >
+                      {loading ? "Проверка..." : "Подтвердить код"}
+                    </button>
+                  </form>
+                )}
+
+                <div className="border-t border-[#8b5cf6]/20 pt-3 text-center">
                   <Link
-                    href="/terms"
-                    className="text-[#7ae9eb] underline"
+                    href="/login"
                     onClick={closeCheckout}
+                    className="text-xs font-semibold text-[#7ae9eb] hover:underline"
                   >
-                    Пользовательское соглашение
-                  </Link>{" "}
-                  и{" "}
-                  <Link
-                    href="/privacy"
-                    className="text-[#7ae9eb] underline"
-                    onClick={closeCheckout}
-                  >
-                    Политику конфиденциальности
+                    Или войти через Telegram →
                   </Link>
-                  .
-                </span>
-              </label>
-
-              {errorMessage && (
-                <div className="rounded-[14px] border border-[#ec5f49]/40 bg-[#2d1020] p-3 text-xs text-[#ff9a8a]">
-                  {errorMessage}
                 </div>
-              )}
-
-              {resultMessage && (
-                <div className="rounded-[14px] border border-[#f472b6]/35 bg-[#23123c] p-3.5 text-xs leading-relaxed text-[#fbcfe8]">
-                  {resultMessage}
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-1">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 rounded-[14px] bg-[#7ae9eb] px-4 py-2.5 text-sm font-bold text-[#120b28] shadow-[0_0_20px_-6px_rgba(122,233,235,0.55)] transition hover:bg-[#9ef1f3] disabled:opacity-60"
-                >
-                  {loading
-                    ? "Проверка..."
-                    : `Перейти к оплате (${formatRub(selectedPlan.price_kopeks)})`}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeCheckout}
-                  className="rounded-[14px] border border-[#8b5cf6]/30 bg-[#1b1238] px-4 py-2.5 text-sm text-[#d8d0ff] transition hover:border-[#7ae9eb]/40"
-                >
-                  Закрыть
-                </button>
               </div>
-            </form>
+            ) : (
+              <form onSubmit={handlePaySubmit} className="mt-5 space-y-4">
+                <div>
+                  <label className="mb-2 block text-xs font-medium text-[#d8d0ff]">
+                    Способ оплаты
+                  </label>
+                  <div className={`grid gap-2.5 ${selectedPlan.is_trial ? "grid-cols-1" : "grid-cols-2"}`}>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod("sbp")}
+                      className={`rounded-[14px] border px-3 py-2.5 text-xs font-bold transition ${
+                        paymentMethod === "sbp"
+                          ? "border-[#7ae9eb] bg-[#7ae9eb]/15 text-[#7ae9eb]"
+                          : "border-[#8b5cf6]/30 bg-[#0d0720] text-[#9e96cc]"
+                      }`}
+                    >
+                      СБП (QR-код)
+                    </button>
+                    {!selectedPlan.is_trial && (
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod("crypto")}
+                        className={`rounded-[14px] border px-3 py-2.5 text-xs font-bold transition ${
+                          paymentMethod === "crypto"
+                            ? "border-[#7ae9eb] bg-[#7ae9eb]/15 text-[#7ae9eb]"
+                            : "border-[#8b5cf6]/30 bg-[#0d0720] text-[#9e96cc]"
+                        }`}
+                      >
+                        Криптовалюта
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {meUser.email ? (
+                  <div className="rounded-[14px] border border-[#8b5cf6]/25 bg-[#0d0720] px-3.5 py-2.5 text-xs text-[#9e96cc]">
+                    Чек и доступ привязаны к{" "}
+                    <span className="font-semibold text-[#efeaff]">{meUser.email}</span>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-[#d8d0ff]">
+                      Email для чека (опционально)
+                    </label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@gmail.com"
+                      className="w-full rounded-[14px] border border-[#8b5cf6]/30 bg-[#0d0720] px-3.5 py-2.5 text-sm text-[#efeaff] placeholder-[#7e75ad] focus:border-[#7ae9eb] focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                {errorMessage && (
+                  <div className="rounded-[14px] border border-[#ec5f49]/40 bg-[#2d1020] p-3 text-xs text-[#ff9a8a]">
+                    {errorMessage}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-1">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="flex-1 rounded-[14px] bg-[#7ae9eb] px-4 py-2.5 text-sm font-bold text-[#120b28] shadow-[0_0_20px_-6px_rgba(122,233,235,0.55)] transition hover:bg-[#9ef1f3] disabled:opacity-60"
+                  >
+                    {loading
+                      ? "Создаем счет..."
+                      : `Перейти к оплате (${formatRub(selectedPlan.price_kopeks)})`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeCheckout}
+                    className="rounded-[14px] border border-[#8b5cf6]/30 bg-[#1b1238] px-4 py-2.5 text-sm text-[#d8d0ff] transition hover:border-[#7ae9eb]/40"
+                  >
+                    Закрыть
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
