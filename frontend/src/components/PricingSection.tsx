@@ -42,11 +42,12 @@ function formatDurationLabel(days: number): string {
 }
 
 export function PricingSection({ plans }: { plans: PublicPlan[] }) {
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const [meUser, setMeUser] = useState<MeUser | null>(null);
+  const [hasActiveSub, setHasActiveSub] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<PublicPlan | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<"sbp" | "crypto">("sbp");
 
-  // Если не авторизован — быстрый Email OTP прямо в окне оплаты
   const [email, setEmail] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
@@ -61,11 +62,16 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
       if (res.ok) {
         const data = await res.json();
         setMeUser(data.user || null);
+        setHasActiveSub(Boolean(data.active_subscription));
       } else {
         setMeUser(null);
+        setHasActiveSub(false);
       }
     } catch {
       setMeUser(null);
+      setHasActiveSub(false);
+    } finally {
+      setSessionLoaded(true);
     }
   }
 
@@ -75,7 +81,8 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
     return () => window.removeEventListener("linkori-auth-changed", refreshSession);
   }, []);
 
-  const trialPlans = plans.filter((p) => p.is_trial);
+  const canShowTrial = sessionLoaded && (!meUser || (!meUser.has_used_trial && !hasActiveSub));
+  const trialPlans = canShowTrial ? plans.filter((p) => p.is_trial) : [];
   const regularPlans = plans.filter((p) => !p.is_trial);
 
   const sortedRegular = [...regularPlans].sort((a, b) => a.duration_days - b.duration_days);
@@ -158,7 +165,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
         setErrorMessage(data.detail || "Неверный код подтверждения.");
         return;
       }
-      setMeUser(data.user);
+      await refreshSession();
       window.dispatchEvent(new Event("linkori-auth-changed"));
       setOtpSent(false);
     } catch {
@@ -214,42 +221,38 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
 
       {trialPlans.length > 0 && (
         <div className="mb-8 space-y-4">
-          {trialPlans.map((trial) => {
-            const used = Boolean(meUser?.has_used_trial);
-            return (
-              <div
-                key={trial.id}
-                className="flex flex-col items-start justify-between gap-4 rounded-[22px] border border-[#f472b6]/40 bg-gradient-to-r from-[#23123c] to-[#160e31] p-6 shadow-[0_18px_45px_-15px_rgba(6,3,20,0.9)] sm:flex-row sm:items-center"
-              >
-                <div>
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <span className="rounded-lg border border-[#f472b6]/45 bg-[#f472b6]/15 px-2.5 py-1 text-xs font-bold text-[#fbcfe8]">
-                      Пробный период • {formatDurationLabel(trial.duration_days)}
-                    </span>
-                    <span className="text-xs text-[#9e96cc]">
-                      Только СБП • 1 раз для новых пользователей
-                    </span>
-                  </div>
-                  <h3 className="mt-2.5 text-xl font-bold text-[#efeaff]">
-                    {trial.name} —{" "}
-                    <span className="text-[#7ae9eb]">{formatRub(trial.price_kopeks)}</span>
-                  </h3>
-                  {trial.description && (
-                    <p className="mt-1 text-sm text-[#9e96cc]">{trial.description}</p>
-                  )}
+          {trialPlans.map((trial) => (
+            <div
+              key={trial.id}
+              className="flex flex-col items-start justify-between gap-4 rounded-[22px] border border-[#f472b6]/40 bg-gradient-to-r from-[#23123c] to-[#160e31] p-6 shadow-[0_18px_45px_-15px_rgba(6,3,20,0.9)] sm:flex-row sm:items-center"
+            >
+              <div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <span className="rounded-lg border border-[#f472b6]/45 bg-[#f472b6]/15 px-2.5 py-1 text-xs font-bold text-[#fbcfe8]">
+                    Пробный период • {formatDurationLabel(trial.duration_days)}
+                  </span>
+                  <span className="text-xs text-[#9e96cc]">
+                    Только СБП • 1 раз для новых пользователей
+                  </span>
                 </div>
-
-                <button
-                  type="button"
-                  disabled={used}
-                  onClick={() => openCheckout(trial)}
-                  className="shrink-0 rounded-[14px] bg-[#7ae9eb] px-6 py-3 text-sm font-bold text-[#120b28] shadow-[0_0_24px_-6px_rgba(122,233,235,0.55)] transition hover:bg-[#9ef1f3] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {used ? "Пробный период использован" : `Попробовать за ${formatRub(trial.price_kopeks)}`}
-                </button>
+                <h3 className="mt-2.5 text-xl font-bold text-[#efeaff]">
+                  {trial.name} —{" "}
+                  <span className="text-[#7ae9eb]">{formatRub(trial.price_kopeks)}</span>
+                </h3>
+                {trial.description && (
+                  <p className="mt-1 text-sm text-[#9e96cc]">{trial.description}</p>
+                )}
               </div>
-            );
-          })}
+
+              <button
+                type="button"
+                onClick={() => openCheckout(trial)}
+                className="shrink-0 rounded-[14px] bg-[#7ae9eb] px-6 py-3 text-sm font-bold text-[#120b28] shadow-[0_0_24px_-6px_rgba(122,233,235,0.55)] transition hover:bg-[#9ef1f3]"
+              >
+                Попробовать за {formatRub(trial.price_kopeks)}
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
