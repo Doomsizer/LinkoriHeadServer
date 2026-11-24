@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { hasLocalLegalConsent, setLocalLegalConsent } from "@/lib/consent";
+import { captureReferralFromUrl } from "@/lib/referral";
 
 const UNBLOCKED_PATHS = new Set(["/privacy", "/terms"]);
 
@@ -12,6 +13,7 @@ export function ConsentGate() {
   const [accepted, setAccepted] = useState<boolean | null>(null);
 
   useEffect(() => {
+    captureReferralFromUrl();
     setAccepted(hasLocalLegalConsent());
   }, []);
 

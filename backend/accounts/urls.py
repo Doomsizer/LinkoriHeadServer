@@ -8,6 +8,7 @@ from .views import (
     TelegramAuthConfirmView,
     TelegramAuthInitView,
     TelegramAuthStatusView,
+    WebApplyReferralView,
     WebLogoutView,
     WebMeView,
 )
@@ -24,6 +25,7 @@ urlpatterns = [
     path("telegram-auth/confirm/", TelegramAuthConfirmView.as_view(), name="tg-auth-confirm"),
     path("email-auth/request/", EmailOtpRequestView.as_view(), name="email-auth-request"),
     path("email-auth/verify/", EmailOtpVerifyView.as_view(), name="email-auth-verify"),
+    path("apply-referral/", WebApplyReferralView.as_view(), name="web-apply-referral"),
     path("me/", WebMeView.as_view(), name="web-me"),
     path("logout/", WebLogoutView.as_view(), name="web-logout"),
 ]

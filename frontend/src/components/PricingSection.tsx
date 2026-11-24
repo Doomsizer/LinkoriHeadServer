@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import type { PublicPlan } from "@/lib/api";
 import { hasLocalLegalConsent } from "@/lib/consent";
+import { clearPendingRefCode, getPendingRefCode } from "@/lib/referral";
 
 interface MeUser {
   id: number;
@@ -13,6 +14,11 @@ interface MeUser {
   has_used_trial: boolean;
 }
 
+const FEE_PERCENT_BY_METHOD: Record<"sbp" | "crypto", number> = {
+  sbp: 7,
+  crypto: 5,
+};
+
 function getCookie(name: string): string {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
   return match ? decodeURIComponent(match[1]) : "";
@@ -20,6 +26,10 @@ function getCookie(name: string): string {
 
 function formatRub(kopeks: number): string {
   const rub = kopeks / 100;
+  return Number.isInteger(rub) ? `${rub} ₽` : `${rub.toFixed(2)} ₽`;
+}
+
+function formatRubFloat(rub: number): string {
   return Number.isInteger(rub) ? `${rub} ₽` : `${rub.toFixed(2)} ₽`;
 }
 
@@ -158,6 +168,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
           email: email.trim(),
           code: otpCode.trim(),
           accepted_legal: hasLocalLegalConsent() || acceptedTerms,
+          referred_by_code: getPendingRefCode(),
         }),
       });
       const data = await res.json();
@@ -165,6 +176,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
         setErrorMessage(data.detail || "Неверный код подтверждения.");
         return;
       }
+      clearPendingRefCode();
       await refreshSession();
       window.dispatchEvent(new Event("linkori-auth-changed"));
       setOtpSent(false);
@@ -213,6 +225,12 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
     }
   }
 
+  const activeMethod: "sbp" | "crypto" = selectedPlan?.is_trial ? "sbp" : paymentMethod;
+  const feePercent = FEE_PERCENT_BY_METHOD[activeMethod];
+  const baseRub = selectedPlan ? selectedPlan.price_kopeks / 100 : 0;
+  const feeRub = Math.round(baseRub * feePercent) / 100;
+  const totalWithFeeRub = Math.round((baseRub + feeRub) * 100) / 100;
+
   return (
     <section id="pricing" className="mx-auto max-w-6xl px-4 py-14">
       <h2 className="mb-8 text-center text-3xl font-bold text-[#efeaff] sm:text-4xl">
@@ -232,7 +250,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
                     Пробный период • {formatDurationLabel(trial.duration_days)}
                   </span>
                   <span className="text-xs text-[#9e96cc]">
-                    Только СБП • 1 раз для новых пользователей
+                    Только СБП (+7% комиссия) • 1 раз для новых пользователей
                   </span>
                 </div>
                 <h3 className="mt-2.5 text-xl font-bold text-[#efeaff]">
@@ -462,33 +480,50 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
               <form onSubmit={handlePaySubmit} className="mt-5 space-y-4">
                 <div>
                   <label className="mb-2 block text-xs font-medium text-[#d8d0ff]">
-                    Способ оплаты
+                    Способ оплаты (комиссия шлюза на стороне покупателя)
                   </label>
                   <div className={`grid gap-2.5 ${selectedPlan.is_trial ? "grid-cols-1" : "grid-cols-2"}`}>
                     <button
                       type="button"
                       onClick={() => setPaymentMethod("sbp")}
-                      className={`rounded-[14px] border px-3 py-2.5 text-xs font-bold transition ${
-                        paymentMethod === "sbp"
+                      className={`rounded-[14px] border px-3 py-2.5 text-center transition ${
+                        activeMethod === "sbp"
                           ? "border-[#7ae9eb] bg-[#7ae9eb]/15 text-[#7ae9eb]"
                           : "border-[#8b5cf6]/30 bg-[#0d0720] text-[#9e96cc]"
                       }`}
                     >
-                      СБП (QR-код)
+                      <div className="text-xs font-bold">СБП (QR-код)</div>
+                      <div className="mt-0.5 text-[11px] opacity-80">Комиссия +7%</div>
                     </button>
                     {!selectedPlan.is_trial && (
                       <button
                         type="button"
                         onClick={() => setPaymentMethod("crypto")}
-                        className={`rounded-[14px] border px-3 py-2.5 text-xs font-bold transition ${
-                          paymentMethod === "crypto"
+                        className={`rounded-[14px] border px-3 py-2.5 text-center transition ${
+                          activeMethod === "crypto"
                             ? "border-[#7ae9eb] bg-[#7ae9eb]/15 text-[#7ae9eb]"
                             : "border-[#8b5cf6]/30 bg-[#0d0720] text-[#9e96cc]"
                         }`}
                       >
-                        Криптовалюта
+                        <div className="text-xs font-bold">Криптовалюта</div>
+                        <div className="mt-0.5 text-[11px] opacity-80">Комиссия +5%</div>
                       </button>
                     )}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 rounded-[14px] border border-[#8b5cf6]/25 bg-[#0d0720] p-3.5 text-xs">
+                  <div className="flex justify-between text-[#9e96cc]">
+                    <span>Тариф:</span>
+                    <span>{formatRubFloat(baseRub)}</span>
+                  </div>
+                  <div className="flex justify-between text-[#9e96cc]">
+                    <span>Комиссия платежной системы (+{feePercent}%):</span>
+                    <span>~{formatRubFloat(feeRub)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-[#8b5cf6]/20 pt-1.5 text-sm font-bold text-[#7ae9eb]">
+                    <span>К оплате на странице Platega:</span>
+                    <span>~{formatRubFloat(totalWithFeeRub)}</span>
                   </div>
                 </div>
 
@@ -526,7 +561,7 @@ export function PricingSection({ plans }: { plans: PublicPlan[] }) {
                   >
                     {loading
                       ? "Создаем счет..."
-                      : `Перейти к оплате (${formatRub(selectedPlan.price_kopeks)})`}
+                      : `Перейти к оплате (~${formatRubFloat(totalWithFeeRub)})`}
                   </button>
                   <button
                     type="button"

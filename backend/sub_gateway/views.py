@@ -31,6 +31,7 @@ DEEPLINK_SCHEMES = {
     "happ": ("Happ", "happ://add/{sub_url}"),
     "v2raytun": ("v2RayTun", "v2raytun://import/{sub_url}"),
     "hiddify": ("Hiddify", "hiddify://import/{sub_url}"),
+    "incy": ("INCY", "incy://import/{sub_url}"),
 }
 
 
@@ -261,11 +262,9 @@ def _select_working_public_uris(network_type: str | None, quota: int) -> list[st
     if not pool:
         return []
 
-    # Разделяем на основные 5 стран (NL, DE, SE, FI, LV) и прочие ("левые") страны для хвоста
     core_pool = [item for item in pool if item["tier"] == 0]
     extra_pool = [item for item in pool if item["tier"] > 0]
 
-    # Резервируем до 5 слотов в конце под 5 разных прочих стран
     desired_extra = min(
         TAIL_EXTRA_COUNTRIES_COUNT if quota >= 15 else max(1, quota // 3),
         len(extra_pool),
@@ -283,7 +282,6 @@ def _select_working_public_uris(network_type: str | None, quota: int) -> list[st
         prefer_distinct_tiers=False,
     )
 
-    # Если основных стран оказалось меньше, чем свободных слотов — добираем из оставшихся прочих
     remaining_slots = quota - len(core_selected) - len(extra_selected)
     if remaining_slots > 0 and extra_leftover:
         extra_topup, _ = _pick_diverse(
@@ -293,7 +291,6 @@ def _select_working_public_uris(network_type: str | None, quota: int) -> list[st
         )
         extra_selected.extend(extra_topup)
 
-    # Итоговая сортировка: сначала основные (NL -> DE -> SE -> FI -> LV), затем прочие в конце
     core_selected.sort(
         key=lambda x: (x["country_prio"], x["country_code"], x["proto"], x["latency"], x["id"])
     )
@@ -363,6 +360,7 @@ class SubscriptionGatewayView(View):
         # 1. Отсекаем браузеры красивой страницей без конфигов серверов
         if is_browser_request(request):
             base_sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}"
+            prefix = f"{base_sub_url}/{net}" if net else base_sub_url
             context = {
                 "sub_exists": subscription is not None,
                 "web_url": settings.SUB_WEB_URL,
@@ -371,22 +369,13 @@ class SubscriptionGatewayView(View):
                 "expires_date": (
                     subscription.expires_at.strftime("%d.%m.%Y") if subscription else ""
                 ),
-                "sub_url": f"{base_sub_url}/{net}" if net else base_sub_url,
+                "sub_url": prefix,
                 "sub_lte_url": f"{base_sub_url}/lte",
                 "sub_wifi_url": f"{base_sub_url}/wifi",
-                "open_happ_url": (
-                    f"{base_sub_url}/{net}/open/happ" if net else f"{base_sub_url}/open/happ"
-                ),
-                "open_v2raytun_url": (
-                    f"{base_sub_url}/{net}/open/v2raytun"
-                    if net
-                    else f"{base_sub_url}/open/v2raytun"
-                ),
-                "open_hiddify_url": (
-                    f"{base_sub_url}/{net}/open/hiddify"
-                    if net
-                    else f"{base_sub_url}/open/hiddify"
-                ),
+                "open_happ_url": f"{prefix}/open/happ",
+                "open_v2raytun_url": f"{prefix}/open/v2raytun",
+                "open_hiddify_url": f"{prefix}/open/hiddify",
+                "open_incy_url": f"{prefix}/open/incy",
             }
             response = render(
                 request,
@@ -481,7 +470,7 @@ class SubscriptionGatewayView(View):
                     last_ip=client_ip,
                 )
 
-        # 6. Лимит: 30 для LTE/Wi-Fi и 40 для общей подписки (с учетом 1 слота под «⚡ Лучший сервер»)
+        # 6. Лимит: 30 для LTE/Wi-Fi и 40 для общей подписки
         max_items = MAX_ITEMS_PER_NETWORK_SUB if net in ("lte", "wifi") else MAX_ITEMS_GENERAL_SUB
         max_real_servers = max_items - 1
 

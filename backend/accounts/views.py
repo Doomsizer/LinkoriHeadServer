@@ -1,4 +1,5 @@
 import secrets
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import login, logout
@@ -27,12 +28,14 @@ from .serializers import (
     EmailOtpVerifySerializer,
     TelegramAuthConfirmSerializer,
     TelegramAuthInitSerializer,
+    WebApplyReferralSerializer,
 )
 from .services import AccountLinkError, attach_or_merge_email, merge_users
 
 TG_AUTH_CACHE_PREFIX = "tg_auth:"
 EMAIL_OTP_PREFIX = "email_otp:"
 EMAIL_OTP_COOLDOWN_PREFIX = "email_otp_cd:"
+REFERRAL_WINDOW = timedelta(hours=24)
 
 
 def _iso_utc(dt) -> str | None:
@@ -169,6 +172,7 @@ class TelegramAuthInitView(APIView):
         serializer.is_valid(raise_exception=True)
 
         accepted_legal = serializer.validated_data["accepted_legal"]
+        ref_code = (serializer.validated_data.get("referred_by_code") or "").strip()
         auth_token = secrets.token_urlsafe(24)
         ttl = settings.TELEGRAM_AUTH_TTL_SECONDS
         link_to_user_id = request.user.id if request.user.is_authenticated else None
@@ -181,6 +185,7 @@ class TelegramAuthInitView(APIView):
                 "user_id": None,
                 "link_to_user_id": link_to_user_id,
                 "accepted_legal": accepted_legal,
+                "referred_by_code": ref_code,
             },
             timeout=ttl,
         )
@@ -254,6 +259,7 @@ class TelegramAuthConfirmView(APIView):
             )
 
         accepted_legal = bool(data.get("accepted_legal"))
+        ref_code = str(data.get("referred_by_code") or "").strip()
         link_to_user_id = data.get("link_to_user_id")
         now = timezone.now()
 
@@ -282,12 +288,19 @@ class TelegramAuthConfirmView(APIView):
                 link_to_user_id = None
 
         if not link_to_user_id:
+            referrer = None
+            if ref_code:
+                candidate = User.objects.filter(referral_code__iexact=ref_code).first()
+                if candidate is not None and candidate.telegram_id != telegram_id:
+                    referrer = candidate
+
             try:
                 user, _ = User.objects.get_or_create(
                     telegram_id=telegram_id,
                     defaults={
                         "username": f"tg_{telegram_id}",
                         "telegram_username": telegram_username,
+                        "referred_by": referrer,
                         "is_legal_accepted": accepted_legal,
                         "legal_accepted_at": now if accepted_legal else None,
                     },
@@ -457,6 +470,59 @@ class EmailOtpVerifyView(APIView):
         )
 
 
+class WebApplyReferralView(APIView):
+    """
+    Позволяет новому пользователю в кабинете ввести реферальный код
+    в течение 24 часов после создания аккаунта (если код еще не применен).
+    """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = WebApplyReferralSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        if user.referred_by_id is not None:
+            return Response(
+                {"detail": "Реферальный код уже применен к вашему аккаунту."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if timezone.now() - user.date_joined > REFERRAL_WINDOW:
+            return Response(
+                {"detail": "Ввести реферальный код можно только в течение 24 часов после регистрации."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        code = serializer.validated_data["referral_code"].strip()
+        referrer = User.objects.filter(referral_code__iexact=code).first()
+        if referrer is None:
+            return Response(
+                {"detail": "Реферальный код не найден."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if referrer.id == user.id:
+            return Response(
+                {"detail": "Нельзя указать собственный реферальный код."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if referrer.referred_by_id == user.id:
+            return Response(
+                {"detail": "Взаимная привязка рефералов запрещена."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.referred_by = referrer
+        user.save(update_fields=["referred_by"])
+
+        return Response(
+            {"status": "ok", "message": "Реферальный код успешно применен!"},
+            status=status.HTTP_200_OK,
+        )
+
+
 class WebMeView(APIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated]
@@ -472,12 +538,18 @@ class WebMeView(APIView):
             ]
             or 0
         )
+        can_apply_referral = (
+            user.referred_by_id is None
+            and (timezone.now() - user.date_joined) <= REFERRAL_WINDOW
+        )
 
         return Response(
             {
                 "user": _serialize_web_user(user),
                 "referrals_count": referrals_count,
                 "referral_bonus_hours": bonus_hours,
+                "has_referrer": user.referred_by_id is not None,
+                "can_apply_referral": can_apply_referral,
                 "active_subscription": serialize_subscription(sub) if sub else None,
                 "devices_count": sub.devices.count() if sub else 0,
             },
