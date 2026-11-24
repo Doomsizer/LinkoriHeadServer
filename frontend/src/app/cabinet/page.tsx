@@ -16,6 +16,8 @@ interface MeResponse {
   };
   referrals_count: number;
   referral_bonus_hours: number;
+  has_referrer: boolean;
+  can_apply_referral: boolean;
   devices_count: number;
   active_subscription: {
     id: string;
@@ -46,22 +48,25 @@ function formatBonusTime(hours: number): string {
 export default function CabinetPage() {
   const router = useRouter();
   const [data, setData] = useState<MeResponse | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [netMode, setNetMode] = useState<"all" | "lte" | "wifi">("all");
 
-  // Статус оплаты после возврата с Platega
   const [paymentBanner, setPaymentBanner] = useState<{
     type: "pending" | "paid" | "failed";
     text: string;
   } | null>(null);
 
-  // Привязка Email
+  const [refInput, setRefInput] = useState("");
+  const [refMsg, setRefMsg] = useState<string | null>(null);
+  const [refErr, setRefErr] = useState<string | null>(null);
+  const [refLoading, setRefLoading] = useState(false);
+
   const [linkEmail, setLinkEmail] = useState("");
   const [linkOtpSent, setLinkOtpSent] = useState(false);
   const [linkOtpCode, setLinkOtpCode] = useState("");
   const [linkMsg, setLinkMsg] = useState<string | null>(null);
   const [linkErr, setLinkErr] = useState<string | null>(null);
 
-  // Привязка Telegram
   const [tgBotUrl, setTgBotUrl] = useState<string | null>(null);
   const [tgAuthToken, setTgAuthToken] = useState<string | null>(null);
 
@@ -170,6 +175,36 @@ export default function CabinetPage() {
     router.replace("/");
   }
 
+  async function handleApplyReferral(e: FormEvent) {
+    e.preventDefault();
+    setRefLoading(true);
+    setRefErr(null);
+    setRefMsg(null);
+    try {
+      const res = await fetch("/api/accounts/apply-referral/", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCookie("csrftoken"),
+        },
+        body: JSON.stringify({ referral_code: refInput.trim() }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        setRefErr(d.detail || "Не удалось применить код.");
+        return;
+      }
+      setRefMsg(d.message || "Реферальный код применен!");
+      setRefInput("");
+      loadProfile();
+    } catch {
+      setRefErr("Ошибка соединения с сервером.");
+    } finally {
+      setRefLoading(false);
+    }
+  }
+
   async function handleSendLinkEmail(e: FormEvent) {
     e.preventDefault();
     setLinkErr(null);
@@ -236,11 +271,11 @@ export default function CabinetPage() {
     window.open(d.bot_url, "_blank", "noopener,noreferrer");
   }
 
-  function copyText(text: string) {
+  function copyText(text: string, key: string) {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
     }
   }
 
@@ -253,7 +288,10 @@ export default function CabinetPage() {
   }
 
   const sub = data.active_subscription;
-  const subUrl = sub ? `https://sub.linkori.org/${sub.sub_token}` : null;
+  const baseSubUrl = sub ? `https://sub.linkori.org/${sub.sub_token}` : null;
+  const activeSubUrl =
+    baseSubUrl && netMode !== "all" ? `${baseSubUrl}/${netMode}` : baseSubUrl;
+  const refShareUrl = `https://linkori.org/?ref=${data.user.referral_code}`;
 
   return (
     <section className="mx-auto max-w-4xl px-4 py-12">
@@ -310,17 +348,67 @@ export default function CabinetPage() {
           <div className="mt-2 text-2xl font-bold text-[#efeaff]">{data.referrals_count}</div>
         </div>
         <div className="rounded-[22px] border border-[#8b5cf6]/25 bg-[#160e31] p-5">
-          <div className="text-xs text-[#9e96cc]">Реферальный код</div>
-          <div className="mt-2 font-mono text-lg font-bold text-[#fbcfe8]">
-            {data.user.referral_code}
+          <div className="text-xs text-[#9e96cc]">Ваш реферальный код</div>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="font-mono text-lg font-bold text-[#fbcfe8]">
+              {data.user.referral_code}
+            </span>
+            <button
+              type="button"
+              onClick={() => copyText(refShareUrl, "ref")}
+              className="rounded-lg border border-[#f472b6]/35 bg-[#f472b6]/10 px-2.5 py-1 text-[11px] font-semibold text-[#fbcfe8] hover:bg-[#f472b6]/20"
+            >
+              {copiedKey === "ref" ? "Скопировано" : "Ссылка"}
+            </button>
           </div>
         </div>
       </div>
 
+      {(data.can_apply_referral || refMsg) && (
+        <div className="mt-5 rounded-[22px] border border-[#f472b6]/35 bg-[#160e31] p-5">
+          <div className="text-sm font-bold text-[#efeaff]">
+            Есть реферальный код приглашения?
+          </div>
+          <p className="mt-1 text-xs text-[#9e96cc]">
+            Ввести код можно один раз в течение 24 часов после регистрации аккаунта.
+          </p>
+
+          {refMsg ? (
+            <div className="mt-3 rounded-[14px] border border-[#2fbf8a]/40 bg-[#2fbf8a]/15 p-3 text-xs text-[#6ff0bd]">
+              {refMsg}
+            </div>
+          ) : (
+            <form onSubmit={handleApplyReferral} className="mt-3 flex flex-wrap gap-2.5">
+              <input
+                type="text"
+                required
+                value={refInput}
+                onChange={(e) => setRefInput(e.target.value.toUpperCase())}
+                placeholder="Например: A1B2C3D4E5"
+                className="min-w-[200px] flex-1 rounded-[14px] border border-[#8b5cf6]/30 bg-[#0d0720] px-3.5 py-2 font-mono text-sm uppercase text-[#efeaff] placeholder-[#7e75ad] focus:border-[#7ae9eb] focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={refLoading}
+                className="rounded-[14px] bg-[#7ae9eb] px-5 py-2 text-xs font-bold text-[#120b28] transition hover:bg-[#9ef1f3] disabled:opacity-60"
+              >
+                {refLoading ? "Проверка..." : "Применить код"}
+              </button>
+            </form>
+          )}
+
+          {refErr && (
+            <div className="mt-3 rounded-[14px] border border-[#ec5f49]/40 bg-[#2d1020] p-3 text-xs text-[#ff9a8a]">
+              {refErr}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mt-6 rounded-[22px] border border-[#7ae9eb]/35 bg-[#160e31] p-6 shadow-[0_20px_50px_-15px_rgba(6,3,20,0.9)]">
         <h2 className="text-xl font-bold text-[#efeaff]">Статус доступа</h2>
 
-        {sub && subUrl ? (
+        {sub && activeSubUrl ? (
           <div className="mt-4 space-y-4">
             <div className="flex flex-wrap gap-6 text-sm text-[#d8d0ff]">
               <div>
@@ -340,38 +428,83 @@ export default function CabinetPage() {
               </div>
             </div>
 
+            <div>
+              <div className="mb-2 text-xs text-[#9e96cc]">Профиль сети для ссылки подключения:</div>
+              <div className="inline-flex flex-wrap gap-1 rounded-[14px] border border-[#8b5cf6]/25 bg-[#0d0720] p-1">
+                <button
+                  type="button"
+                  onClick={() => setNetMode("all")}
+                  className={`rounded-[10px] px-3.5 py-1.5 text-xs font-bold transition ${
+                    netMode === "all"
+                      ? "bg-[#7ae9eb] text-[#120b28]"
+                      : "text-[#9e96cc] hover:text-[#efeaff]"
+                  }`}
+                >
+                  Общая (все сети)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNetMode("lte")}
+                  className={`rounded-[10px] px-3.5 py-1.5 text-xs font-bold transition ${
+                    netMode === "lte"
+                      ? "bg-[#7ae9eb] text-[#120b28]"
+                      : "text-[#9e96cc] hover:text-[#efeaff]"
+                  }`}
+                >
+                  LTE (мобильная)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNetMode("wifi")}
+                  className={`rounded-[10px] px-3.5 py-1.5 text-xs font-bold transition ${
+                    netMode === "wifi"
+                      ? "bg-[#7ae9eb] text-[#120b28]"
+                      : "text-[#9e96cc] hover:text-[#efeaff]"
+                  }`}
+                >
+                  Wi-Fi (домашняя)
+                </button>
+              </div>
+            </div>
+
             <div className="rounded-[14px] border border-[#8b5cf6]/30 bg-[#0d0720] p-3.5">
               <div className="text-xs text-[#9e96cc]">Ссылка подключения:</div>
               <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3">
-                <code className="break-all text-xs text-[#7ae9eb]">{subUrl}</code>
+                <code className="break-all text-xs text-[#7ae9eb]">{activeSubUrl}</code>
                 <button
                   type="button"
-                  onClick={() => copyText(subUrl)}
+                  onClick={() => copyText(activeSubUrl, "sub")}
                   className="rounded-lg bg-[#7ae9eb] px-3 py-1.5 text-xs font-bold text-[#120b28] transition hover:bg-[#9ef1f3]"
                 >
-                  {copied ? "Скопировано" : "Копировать"}
+                  {copiedKey === "sub" ? "Скопировано" : "Копировать"}
                 </button>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2.5">
               <a
-                href={`${subUrl}/open/happ`}
+                href={`${activeSubUrl}/open/happ`}
                 className="rounded-xl border border-[#7ae9eb]/35 bg-[#7ae9eb]/10 px-4 py-2 text-xs font-semibold text-[#7ae9eb] hover:bg-[#7ae9eb]/20"
               >
                 Открыть в Happ
               </a>
               <a
-                href={`${subUrl}/open/v2raytun`}
+                href={`${activeSubUrl}/open/v2raytun`}
                 className="rounded-xl border border-[#7ae9eb]/35 bg-[#7ae9eb]/10 px-4 py-2 text-xs font-semibold text-[#7ae9eb] hover:bg-[#7ae9eb]/20"
               >
                 Открыть в v2RayTun
               </a>
               <a
-                href={`${subUrl}/open/hiddify`}
+                href={`${activeSubUrl}/open/hiddify`}
                 className="rounded-xl border border-[#7ae9eb]/35 bg-[#7ae9eb]/10 px-4 py-2 text-xs font-semibold text-[#7ae9eb] hover:bg-[#7ae9eb]/20"
               >
                 Открыть в Hiddify
+              </a>
+              <a
+                href={`${activeSubUrl}/open/incy`}
+                className="rounded-xl border border-[#7ae9eb]/35 bg-[#7ae9eb]/10 px-4 py-2 text-xs font-semibold text-[#7ae9eb] hover:bg-[#7ae9eb]/20"
+              >
+                Открыть в INCY
               </a>
               <Link
                 href="/#pricing"
@@ -394,7 +527,6 @@ export default function CabinetPage() {
         )}
       </div>
 
-      {/* Блок привязки второго способа входа (Email <-> Telegram) */}
       <div className="mt-6 rounded-[22px] border border-[#8b5cf6]/25 bg-[#160e31] p-6">
         <h2 className="text-lg font-bold text-[#efeaff]">Привязка аккаунтов</h2>
         <p className="mt-1 text-xs text-[#9e96cc]">
