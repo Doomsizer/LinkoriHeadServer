@@ -161,11 +161,6 @@ class BotAcceptLegalView(APIView):
 
 
 class TelegramAuthInitView(APIView):
-    """
-    Создает auth_token в Redis. Если пользователь уже авторизован на сайте по Email,
-    сохраняет link_to_user_id для привязки Telegram к этому же аккаунту.
-    """
-
     authentication_classes = [SessionAuthentication]
     permission_classes = [AllowAny]
 
@@ -328,18 +323,13 @@ class TelegramAuthConfirmView(APIView):
 
 
 class EmailOtpRequestView(APIView):
-    """
-    Отправляет 6-значный одноразовый код на email (для входа или привязки почты).
-    Отсекает Rambler, Proton и одноразовые почты.
-    """
-
     authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
-        if not settings.EMAIL_HOST and not settings.DEBUG:
+        if not settings.RESEND_API_KEY and not settings.EMAIL_HOST and not settings.DEBUG:
             return Response(
-                {"detail": "Отправка писем временно недоступна: SMTP-сервер еще не настроен."},
+                {"detail": "Отправка писем временно недоступна: почтовый шлюз не настроен."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
@@ -392,12 +382,6 @@ class EmailOtpRequestView(APIView):
 
 
 class EmailOtpVerifyView(APIView):
-    """
-    Проверяет 6-значный код из письма.
-    Если пользователь уже залогинен (например, через Telegram) — привязывает email к его аккаунту
-    (или объединяет с существующим веб-аккаунтом). Иначе авторизует/создает веб-аккаунт.
-    """
-
     authentication_classes = [SessionAuthentication]
     permission_classes = [AllowAny]
 

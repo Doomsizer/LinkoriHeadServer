@@ -162,7 +162,7 @@ BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "linkoribot").lstrip("@")
 TELEGRAM_AUTH_TTL_SECONDS = int(os.getenv("TELEGRAM_AUTH_TTL_SECONDS", "300"))
 
-# Почта (SMTP для OTP-кодов входа)
+# Почта (HTTPS API Resend по умолчанию, либо обычный SMTP)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
@@ -170,8 +170,15 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "1") == "1"
 EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "0") == "1"
 EMAIL_TIMEOUT = 10
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "support@linkori.org")
-if EMAIL_HOST:
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@linkori.org")
+
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+if not RESEND_API_KEY and EMAIL_HOST == "smtp.resend.com" and EMAIL_HOST_PASSWORD.startswith("re_"):
+    RESEND_API_KEY = EMAIL_HOST_PASSWORD
+
+if RESEND_API_KEY:
+    EMAIL_BACKEND = "accounts.resend_backend.ResendApiEmailBackend"
+elif EMAIL_HOST:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
