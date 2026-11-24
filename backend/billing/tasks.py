@@ -1,11 +1,13 @@
 import logging
+from datetime import timedelta
 
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone
 
 from nodes.xui_sync import sync_user_subscription_on_all_panels
 
-from .models import Subscription
+from .models import Payment, Subscription
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,6 @@ def expire_overdue_subscriptions():
     )
 
     for user_id in user_ids:
-        # Отключаем на панелях только если у пользователя нет другой действующей подписки
         still_active = Subscription.objects.filter(
             user_id=user_id,
             status=Subscription.Status.ACTIVE,
@@ -60,3 +61,20 @@ def expire_overdue_subscriptions():
             enable=False,
             total_gb_bytes=sample_sub.traffic_limit_bytes,
         )
+
+
+@shared_task(ignore_result=True)
+def expire_stale_pending_payments():
+    from .services import sync_payment_status_with_provider
+
+    cutoff = timezone.now() - timedelta(minutes=settings.PAYMENT_PENDING_TTL_MINUTES)
+    stale_payments = Payment.objects.filter(
+        status=Payment.Status.PENDING,
+        created_at__lte=cutoff,
+    ).order_by("created_at")[:100]
+
+    for payment in stale_payments:
+        try:
+            sync_payment_status_with_provider(payment)
+        except Exception as exc:
+            logger.warning("Не удалось закрыть истекший платеж %s: %s", payment.payment_id, exc)

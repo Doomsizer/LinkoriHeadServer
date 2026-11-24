@@ -116,6 +116,27 @@ CSRF_COOKIE_SECURE = not DEBUG
 _raw_admin_path = os.getenv("DJANGO_ADMIN_PATH", "admin").strip("/") or "admin"
 ADMIN_URL_PATH = f"{_raw_admin_path}/"
 
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+    },
+}
+
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -142,6 +163,10 @@ CELERY_BEAT_SCHEDULE = {
     },
     "billing-expire-subscriptions": {
         "task": "billing.tasks.expire_overdue_subscriptions",
+        "schedule": 120.0,
+    },
+    "billing-expire-pending-payments": {
+        "task": "billing.tasks.expire_stale_pending_payments",
         "schedule": 120.0,
     },
 }
@@ -185,6 +210,7 @@ else:
 
 # Биллинг, рефералка (+15% дней) и Platega.io
 REFERRAL_BONUS_PERCENT = int(os.getenv("REFERRAL_BONUS_PERCENT", "15"))
+PAYMENT_PENDING_TTL_MINUTES = int(os.getenv("PAYMENT_PENDING_TTL_MINUTES", "20"))
 PAYMENT_PROVIDER = os.getenv("PAYMENT_PROVIDER", "platega").lower()
 ALLOW_STUB_PAYMENTS = os.getenv("ALLOW_STUB_PAYMENTS", "0") == "1"
 

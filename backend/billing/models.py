@@ -215,6 +215,7 @@ class Payment(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Ожидает оплаты"
         PAID = "paid", "Оплачен"
+        EXPIRED = "expired", "Истек"
         FAILED = "failed", "Ошибка / Отменен"
 
     payment_id = models.CharField(

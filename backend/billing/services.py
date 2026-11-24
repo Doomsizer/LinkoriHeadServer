@@ -105,9 +105,15 @@ def extend_subscription_by_timedelta(
         .first()
     )
     if active_sub is not None:
-        active_sub.plan = plan
-        active_sub.max_devices = plan.max_devices
-        active_sub.traffic_limit_bytes = traffic_limit_bytes
+        if not plan.is_trial:
+            active_sub.plan = plan
+        active_sub.max_devices = max(active_sub.max_devices, plan.max_devices)
+        if traffic_limit_bytes == 0:
+            active_sub.traffic_limit_bytes = 0
+        elif active_sub.traffic_limit_bytes > 0:
+            active_sub.traffic_limit_bytes = max(
+                active_sub.traffic_limit_bytes, traffic_limit_bytes
+            )
         active_sub.expires_at = active_sub.expires_at + delta
         active_sub.save(
             update_fields=["plan", "max_devices", "traffic_limit_bytes", "expires_at", "updated_at"]
@@ -180,7 +186,6 @@ def apply_referral_reward(payment: Payment) -> ReferralReward | None:
     bonus_hours = max(1, (payment.plan.duration_days * 24 * settings.REFERRAL_BONUS_PERCENT) // 100)
     referrer = User.objects.select_for_update().get(pk=user.referred_by_id)
 
-    # При начислении бонуса оставляем текущий тариф пригласившего, если у него уже есть подписка
     ref_existing_sub = (
         Subscription.objects.select_related("plan")
         .filter(user=referrer)
@@ -221,6 +226,8 @@ def _resolve_platega_email(user: User, explicit_email: str = "") -> str:
 def _check_trial_eligibility(user: User, payment_channel: str, client_ip: str | None):
     if user.has_used_trial:
         raise BillingError("Пробный период доступен только один раз на аккаунт.")
+    if get_active_subscription(user) is not None:
+        raise BillingError("Пробный период недоступен при наличии активной подписки.")
     if payment_channel != "sbp":
         raise BillingError("Для пробного периода доступна только оплата через СБП.")
     if user.email:
@@ -325,27 +332,35 @@ def create_platega_or_stub_payment(
 def sync_payment_status_with_provider(payment: Payment) -> Payment:
     if payment.status != Payment.Status.PENDING:
         return payment
-    if payment.provider != "platega" or not payment.external_id:
-        return payment
 
-    try:
-        remote_status = fetch_platega_transaction_status(payment.external_id)
-    except PlategaError:
-        return payment
+    now = timezone.now()
+    ttl_delta = timedelta(minutes=settings.PAYMENT_PENDING_TTL_MINUTES)
 
-    if remote_status == "CONFIRMED":
-        return finalize_paid_payment(payment.payment_id)
-    if remote_status in ("CANCELED", "CHARGEBACKED"):
-        payment.status = Payment.Status.FAILED
+    if payment.provider == "platega" and payment.external_id:
+        try:
+            remote_status = fetch_platega_transaction_status(payment.external_id)
+        except PlategaError:
+            remote_status = ""
+
+        if remote_status == "CONFIRMED":
+            return finalize_paid_payment(payment.payment_id)
+        if remote_status in ("CANCELED", "CHARGEBACKED"):
+            payment.status = Payment.Status.FAILED
+            payment.save(update_fields=["status", "updated_at"])
+            return payment
+
+    if payment.created_at <= now - ttl_delta:
+        payment.status = Payment.Status.EXPIRED
         payment.save(update_fields=["status", "updated_at"])
+
     return payment
 
 
 @transaction.atomic
 def finalize_paid_payment(payment_id: str) -> Payment:
     payment = (
-        Payment.objects.select_for_update()
-        .select_related("user", "plan", "subscription")
+        Payment.objects.select_for_update(of=("self",))
+        .select_related("user", "plan")
         .filter(payment_id=payment_id)
         .first()
     )
