@@ -162,7 +162,25 @@ BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "linkoribot").lstrip("@")
 TELEGRAM_AUTH_TTL_SECONDS = int(os.getenv("TELEGRAM_AUTH_TTL_SECONDS", "300"))
 
-# Биллинг, рефералка и платежный шлюз
+# Почта (SMTP для OTP-кодов входа)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "1") == "1"
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "0") == "1"
+EMAIL_TIMEOUT = 10
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "support@linkori.org")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# Биллинг, рефералка (+15% дней) и Platega.io
 REFERRAL_BONUS_PERCENT = int(os.getenv("REFERRAL_BONUS_PERCENT", "15"))
-PAYMENT_PROVIDER = os.getenv("PAYMENT_PROVIDER", "stub").lower()
-ALLOW_STUB_PAYMENTS = os.getenv("ALLOW_STUB_PAYMENTS", "1") == "1"
+PAYMENT_PROVIDER = os.getenv("PAYMENT_PROVIDER", "platega").lower()
+ALLOW_STUB_PAYMENTS = os.getenv("ALLOW_STUB_PAYMENTS", "0") == "1"
+
+PLATEGA_API_URL = os.getenv("PLATEGA_API_URL", "https://app.platega.io").rstrip("/")
+PLATEGA_MERCHANT_ID = os.getenv("PLATEGA_MERCHANT_ID", "")
+PLATEGA_SECRET = os.getenv("PLATEGA_SECRET", "")

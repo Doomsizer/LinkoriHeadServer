@@ -14,10 +14,11 @@ class PlanAdmin(admin.ModelAdmin):
         "price_kopeks",
         "traffic_limit_gb",
         "max_devices",
+        "is_trial",
         "is_active",
         "sort_order",
     )
-    list_filter = ("is_active", "duration_days")
+    list_filter = ("is_active", "is_trial", "duration_days")
     search_fields = ("code", "name", "description")
     ordering = ("sort_order", "price_kopeks")
 
@@ -56,6 +57,7 @@ class SubscriptionAdmin(admin.ModelAdmin):
         "=xray_uuid",
         "=user__telegram_id",
         "user__telegram_username",
+        "user__email",
         "devices__hwid",
     )
     raw_id_fields = ("user",)
@@ -112,6 +114,7 @@ class SubscriptionDeviceAdmin(admin.ModelAdmin):
         "=subscription__sub_token",
         "=subscription__user__telegram_id",
         "subscription__user__telegram_username",
+        "subscription__user__email",
         "last_ip",
         "device_model",
     )
@@ -134,23 +137,35 @@ class PaymentAdmin(admin.ModelAdmin):
         "payment_id",
         "user",
         "plan",
-        "method",
+        "payment_channel",
         "provider",
+        "external_id",
         "amount_kopeks",
         "status",
         "paid_at",
         "created_at",
     )
-    list_filter = ("status", "method", "provider", "created_at")
-    search_fields = ("=payment_id", "=external_id", "=user__telegram_id", "user__telegram_username")
+    list_filter = ("status", "payment_channel", "provider", "created_at")
+    search_fields = (
+        "=payment_id",
+        "=external_id",
+        "=user__telegram_id",
+        "user__telegram_username",
+        "user__email",
+    )
     raw_id_fields = ("user", "subscription")
     readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(ReferralReward)
 class ReferralRewardAdmin(admin.ModelAdmin):
-    list_display = ("id", "referrer", "referred_user", "amount_kopeks", "created_at")
+    list_display = ("id", "referrer", "referred_user", "bonus_hours", "created_at")
     list_filter = ("created_at",)
-    search_fields = ("=referrer__telegram_id", "=referred_user__telegram_id")
+    search_fields = (
+        "=referrer__telegram_id",
+        "=referred_user__telegram_id",
+        "referrer__email",
+        "referred_user__email",
+    )
     raw_id_fields = ("referrer", "referred_user", "payment")
     readonly_fields = ("created_at",)

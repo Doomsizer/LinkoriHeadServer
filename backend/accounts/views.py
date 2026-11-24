@@ -3,7 +3,9 @@ import secrets
 from django.conf import settings
 from django.contrib.auth import login, logout
 from django.core.cache import cache
+from django.core.mail import send_mail
 from django.db import IntegrityError
+from django.db.models import Sum
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from rest_framework import status
@@ -12,18 +14,25 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from billing.models import ReferralReward
 from billing.services import get_active_subscription, serialize_subscription
 
+from .email_utils import EmailValidationError, validate_email_domain
 from .models import User
 from .permissions import HasBotToken
 from .serializers import (
     BotAcceptLegalSerializer,
     BotGetOrCreateUserSerializer,
+    EmailOtpRequestSerializer,
+    EmailOtpVerifySerializer,
     TelegramAuthConfirmSerializer,
     TelegramAuthInitSerializer,
 )
+from .services import AccountLinkError, attach_or_merge_email, merge_users
 
 TG_AUTH_CACHE_PREFIX = "tg_auth:"
+EMAIL_OTP_PREFIX = "email_otp:"
+EMAIL_OTP_COOLDOWN_PREFIX = "email_otp_cd:"
 
 
 def _iso_utc(dt) -> str | None:
@@ -37,19 +46,16 @@ def _serialize_web_user(user: User) -> dict:
         "id": user.id,
         "telegram_id": user.telegram_id,
         "telegram_username": user.telegram_username,
+        "email": user.email,
         "referral_code": user.referral_code,
-        "balance_kopeks": user.balance_kopeks,
+        "balance_kopeks": 0,
+        "has_used_trial": user.has_used_trial,
         "is_legal_accepted": user.is_legal_accepted,
         "legal_accepted_at": _iso_utc(user.legal_accepted_at),
     }
 
 
 class BotGetOrCreateUserView(APIView):
-    """
-    Ищет пользователя по telegram_id или создает нового в БД Django с единым xray_uuid.
-    На панели 3x-ui пользователь при регистрации НЕ создается — только при появлении подписки.
-    """
-
     authentication_classes = []
     permission_classes = [HasBotToken]
 
@@ -103,9 +109,11 @@ class BotGetOrCreateUserView(APIView):
                     "id": user.id,
                     "telegram_id": user.telegram_id,
                     "telegram_username": user.telegram_username,
+                    "email": user.email,
                     "xray_uuid": str(user.xray_uuid),
                     "referral_code": user.referral_code,
-                    "balance_kopeks": user.balance_kopeks,
+                    "balance_kopeks": 0,
+                    "has_used_trial": user.has_used_trial,
                     "is_legal_accepted": user.is_legal_accepted,
                     "legal_accepted_at": _iso_utc(user.legal_accepted_at),
                 },
@@ -115,11 +123,6 @@ class BotGetOrCreateUserView(APIView):
 
 
 class BotAcceptLegalView(APIView):
-    """
-    Фиксирует принятие пользователем Политики конфиденциальности,
-    Пользовательского соглашения и cookies.
-    """
-
     authentication_classes = []
     permission_classes = [HasBotToken]
 
@@ -159,11 +162,11 @@ class BotAcceptLegalView(APIView):
 
 class TelegramAuthInitView(APIView):
     """
-    Публичный эндпоинт для фронта: создает одноразовый auth_token в Redis
-    и возвращает ссылку на Telegram-бота ?start=auth_<token>.
+    Создает auth_token в Redis. Если пользователь уже авторизован на сайте по Email,
+    сохраняет link_to_user_id для привязки Telegram к этому же аккаунту.
     """
 
-    authentication_classes = []
+    authentication_classes = [SessionAuthentication]
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -173,6 +176,7 @@ class TelegramAuthInitView(APIView):
         accepted_legal = serializer.validated_data["accepted_legal"]
         auth_token = secrets.token_urlsafe(24)
         ttl = settings.TELEGRAM_AUTH_TTL_SECONDS
+        link_to_user_id = request.user.id if request.user.is_authenticated else None
 
         cache.set(
             f"{TG_AUTH_CACHE_PREFIX}{auth_token}",
@@ -180,6 +184,7 @@ class TelegramAuthInitView(APIView):
                 "status": "pending",
                 "telegram_id": None,
                 "user_id": None,
+                "link_to_user_id": link_to_user_id,
                 "accepted_legal": accepted_legal,
             },
             timeout=ttl,
@@ -196,12 +201,6 @@ class TelegramAuthInitView(APIView):
 
 
 class TelegramAuthStatusView(APIView):
-    """
-    Публичный поллинг статуса входа с сайта.
-    После подтверждения ботом выставляет Django session cookie (HttpOnly)
-    и удаляет одноразовый auth_token из Redis.
-    """
-
     authentication_classes = []
     permission_classes = [AllowAny]
 
@@ -238,11 +237,6 @@ class TelegramAuthStatusView(APIView):
 
 
 class TelegramAuthConfirmView(APIView):
-    """
-    Закрытый эндпоинт для бота: подтверждает вход по auth_token
-    и привязывает его к User по telegram_id.
-    """
-
     authentication_classes = []
     permission_classes = [HasBotToken]
 
@@ -265,31 +259,57 @@ class TelegramAuthConfirmView(APIView):
             )
 
         accepted_legal = bool(data.get("accepted_legal"))
+        link_to_user_id = data.get("link_to_user_id")
         now = timezone.now()
 
-        try:
-            user, _ = User.objects.get_or_create(
-                telegram_id=telegram_id,
-                defaults={
-                    "username": f"tg_{telegram_id}",
-                    "telegram_username": telegram_username,
-                    "is_legal_accepted": accepted_legal,
-                    "legal_accepted_at": now if accepted_legal else None,
-                },
-            )
-        except IntegrityError:
-            user = User.objects.get(telegram_id=telegram_id)
+        if link_to_user_id:
+            web_user = User.objects.filter(id=link_to_user_id).first()
+            tg_user = User.objects.filter(telegram_id=telegram_id).first()
+            if web_user is not None:
+                if tg_user is not None and tg_user.id != web_user.id:
+                    if tg_user.email and web_user.email and tg_user.canonical_email != web_user.canonical_email:
+                        return Response(
+                            {"detail": "Этот Telegram уже привязан к другому email."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    user = merge_users(primary=web_user, secondary=tg_user)
+                    user.telegram_username = telegram_username
+                    user.save(update_fields=["telegram_username"])
+                else:
+                    web_user.telegram_id = telegram_id
+                    web_user.telegram_username = telegram_username
+                    if accepted_legal and not web_user.is_legal_accepted:
+                        web_user.is_legal_accepted = True
+                        web_user.legal_accepted_at = now
+                    web_user.save()
+                    user = web_user
+            else:
+                link_to_user_id = None
 
-        update_fields: list[str] = []
-        if user.telegram_username != telegram_username:
-            user.telegram_username = telegram_username
-            update_fields.append("telegram_username")
-        if accepted_legal and not user.is_legal_accepted:
-            user.is_legal_accepted = True
-            user.legal_accepted_at = now
-            update_fields.extend(["is_legal_accepted", "legal_accepted_at"])
-        if update_fields:
-            user.save(update_fields=update_fields)
+        if not link_to_user_id:
+            try:
+                user, _ = User.objects.get_or_create(
+                    telegram_id=telegram_id,
+                    defaults={
+                        "username": f"tg_{telegram_id}",
+                        "telegram_username": telegram_username,
+                        "is_legal_accepted": accepted_legal,
+                        "legal_accepted_at": now if accepted_legal else None,
+                    },
+                )
+            except IntegrityError:
+                user = User.objects.get(telegram_id=telegram_id)
+
+            update_fields: list[str] = []
+            if user.telegram_username != telegram_username:
+                user.telegram_username = telegram_username
+                update_fields.append("telegram_username")
+            if accepted_legal and not user.is_legal_accepted:
+                user.is_legal_accepted = True
+                user.legal_accepted_at = now
+                update_fields.extend(["is_legal_accepted", "legal_accepted_at"])
+            if update_fields:
+                user.save(update_fields=update_fields)
 
         cache.set(
             cache_key,
@@ -307,9 +327,153 @@ class TelegramAuthConfirmView(APIView):
         )
 
 
-class WebMeView(APIView):
-    """Текущий авторизованный пользователь сайта + активная подписка."""
+class EmailOtpRequestView(APIView):
+    """
+    Отправляет 6-значный одноразовый код на email (для входа или привязки почты).
+    Отсекает Rambler, Proton и одноразовые почты.
+    """
 
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not settings.EMAIL_HOST and not settings.DEBUG:
+            return Response(
+                {"detail": "Отправка писем временно недоступна: SMTP-сервер еще не настроен."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        serializer = EmailOtpRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            cleaned_email, canonical = validate_email_domain(
+                serializer.validated_data["email"],
+                strict_for_trial=False,
+            )
+        except EmailValidationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        cd_key = f"{EMAIL_OTP_COOLDOWN_PREFIX}{canonical}"
+        if cache.get(cd_key):
+            return Response(
+                {"detail": "Код уже отправлен. Повторная отправка доступна через минуту."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        otp_key = f"{EMAIL_OTP_PREFIX}{canonical}"
+        cache.set(otp_key, {"code": code, "email": cleaned_email, "attempts": 0}, timeout=600)
+        cache.set(cd_key, 1, timeout=60)
+
+        try:
+            send_mail(
+                subject="Код входа в Linkori",
+                message=(
+                    f"Ваш код для входа в Linkori: {code}\n\n"
+                    f"Код действует 10 минут. Никому не передавайте его."
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[cleaned_email],
+                fail_silently=False,
+            )
+        except Exception as exc:
+            cache.delete(otp_key)
+            cache.delete(cd_key)
+            return Response(
+                {"detail": f"Не удалось отправить письмо на почту: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {"status": "sent", "email": cleaned_email, "expires_in": 600},
+            status=status.HTTP_200_OK,
+        )
+
+
+class EmailOtpVerifyView(APIView):
+    """
+    Проверяет 6-значный код из письма.
+    Если пользователь уже залогинен (например, через Telegram) — привязывает email к его аккаунту
+    (или объединяет с существующим веб-аккаунтом). Иначе авторизует/создает веб-аккаунт.
+    """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = EmailOtpVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            cleaned_email, canonical = validate_email_domain(
+                serializer.validated_data["email"],
+                strict_for_trial=False,
+            )
+        except EmailValidationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        entered_code = serializer.validated_data["code"].strip()
+        otp_key = f"{EMAIL_OTP_PREFIX}{canonical}"
+        record = cache.get(otp_key)
+        if not isinstance(record, dict):
+            return Response(
+                {"detail": "Код истек или не запрашивался. Запросите новый код."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        attempts = int(record.get("attempts", 0))
+        if attempts >= 5:
+            cache.delete(otp_key)
+            return Response(
+                {"detail": "Слишком много неверных попыток. Запросите новый код."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not secrets.compare_digest(entered_code, str(record.get("code", ""))):
+            record["attempts"] = attempts + 1
+            cache.set(otp_key, record, timeout=600)
+            return Response({"detail": "Неверный код подтверждения."}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache.delete(otp_key)
+        accepted_legal = serializer.validated_data["accepted_legal"]
+        ref_code = (serializer.validated_data.get("referred_by_code") or "").strip()
+        now = timezone.now()
+
+        if request.user.is_authenticated:
+            try:
+                user = attach_or_merge_email(request.user, cleaned_email)
+            except AccountLinkError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            user = User.objects.filter(canonical_email=canonical).first()
+            if user is None:
+                referrer = None
+                if ref_code:
+                    referrer = User.objects.filter(referral_code__iexact=ref_code).first()
+                user = User.objects.create(
+                    username=f"em_{secrets.token_hex(6)}",
+                    email=cleaned_email,
+                    canonical_email=canonical,
+                    referred_by=referrer,
+                    is_legal_accepted=accepted_legal,
+                    legal_accepted_at=now if accepted_legal else None,
+                )
+            elif accepted_legal and not user.is_legal_accepted:
+                user.is_legal_accepted = True
+                user.legal_accepted_at = now
+                user.save(update_fields=["is_legal_accepted", "legal_accepted_at"])
+
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        get_token(request)
+
+        return Response(
+            {"status": "confirmed", "user": _serialize_web_user(user)},
+            status=status.HTTP_200_OK,
+        )
+
+
+class WebMeView(APIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -318,11 +482,18 @@ class WebMeView(APIView):
         user = request.user
         sub = get_active_subscription(user)
         referrals_count = User.objects.filter(referred_by=user).count()
+        bonus_hours = (
+            ReferralReward.objects.filter(referrer=user).aggregate(total=Sum("bonus_hours"))[
+                "total"
+            ]
+            or 0
+        )
 
         return Response(
             {
                 "user": _serialize_web_user(user),
                 "referrals_count": referrals_count,
+                "referral_bonus_hours": bonus_hours,
                 "active_subscription": serialize_subscription(sub) if sub else None,
                 "devices_count": sub.devices.count() if sub else 0,
             },
@@ -331,8 +502,6 @@ class WebMeView(APIView):
 
 
 class WebLogoutView(APIView):
-    """Выход из веб-сессии."""
-
     authentication_classes = [SessionAuthentication]
     permission_classes = [AllowAny]
 

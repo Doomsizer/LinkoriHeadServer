@@ -11,29 +11,38 @@ class UserAdmin(BaseUserAdmin):
         "username",
         "telegram_id",
         "telegram_username",
+        "email",
+        "has_used_trial",
         "is_legal_accepted",
-        "xray_uuid",
         "referral_code",
-        "balance_kopeks",
         "is_active",
         "date_joined",
     )
-    list_filter = ("is_legal_accepted", "is_active", "is_staff", "is_superuser", "date_joined")
-    search_fields = ("=telegram_id", "=xray_uuid", "telegram_username", "username", "referral_code")
+    list_filter = ("has_used_trial", "is_legal_accepted", "is_active", "is_staff", "date_joined")
+    search_fields = (
+        "=telegram_id",
+        "=xray_uuid",
+        "telegram_username",
+        "email",
+        "canonical_email",
+        "username",
+        "referral_code",
+    )
     readonly_fields = ("date_joined", "last_login")
     raw_id_fields = ("referred_by",)
 
     fieldsets = BaseUserAdmin.fieldsets + (
         (
-            "Telegram и биллинг",
+            "Telegram, Email и подписки",
             {
                 "fields": (
                     "telegram_id",
                     "telegram_username",
+                    "canonical_email",
                     "xray_uuid",
                     "referral_code",
                     "referred_by",
-                    "balance_kopeks",
+                    "has_used_trial",
                     "is_legal_accepted",
                     "legal_accepted_at",
                 )

@@ -5,6 +5,8 @@ from decimal import Decimal
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+from .email_utils import canonicalize_email, normalize_email_raw
+
 
 def generate_referral_code() -> str:
     return secrets.token_hex(5).upper()
@@ -24,6 +26,20 @@ class User(AbstractUser):
         default="",
         db_index=True,
         verbose_name="Telegram username",
+    )
+    email = models.EmailField(
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Email",
+    )
+    canonical_email = models.EmailField(
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name="Канонический Email",
     )
     xray_uuid = models.UUIDField(
         default=uuid.uuid4,
@@ -46,7 +62,12 @@ class User(AbstractUser):
     )
     balance_kopeks = models.BigIntegerField(
         default=0,
-        verbose_name="Баланс (копейки)",
+        verbose_name="Баланс (копейки, не используется)",
+    )
+    has_used_trial = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Использовал триал",
     )
     is_legal_accepted = models.BooleanField(
         default=False,
@@ -65,8 +86,20 @@ class User(AbstractUser):
         ordering = ["-date_joined"]
 
     def save(self, *args, **kwargs):
-        if not self.username and self.telegram_id is not None:
-            self.username = f"tg_{self.telegram_id}"
+        if self.email is not None:
+            norm = normalize_email_raw(self.email)
+            self.email = norm if norm else None
+        if self.email:
+            self.canonical_email = canonicalize_email(self.email)
+        else:
+            self.canonical_email = None
+
+        if not self.username:
+            if self.telegram_id is not None:
+                self.username = f"tg_{self.telegram_id}"
+            elif self.email:
+                self.username = f"em_{secrets.token_hex(6)}"
+
         if not self.referral_code:
             code = generate_referral_code()
             while User.objects.filter(referral_code=code).exists():
@@ -83,4 +116,6 @@ class User(AbstractUser):
             return f"@{self.telegram_username} ({self.telegram_id})"
         if self.telegram_id:
             return f"tg:{self.telegram_id}"
+        if self.email:
+            return self.email
         return self.username

@@ -30,8 +30,13 @@ class Plan(models.Model):
         verbose_name="Лимит трафика (ГБ, 0 = безлимит)",
     )
     max_devices = models.PositiveSmallIntegerField(
-        default=3,
+        default=10,
         verbose_name="Максимум устройств",
+    )
+    is_trial = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Пробный период (1 раз, только СБП, без реф-бонуса)",
     )
     is_active = models.BooleanField(default=True, db_index=True, verbose_name="Активен")
     sort_order = models.PositiveIntegerField(default=100, verbose_name="Порядок сортировки")
@@ -92,7 +97,7 @@ class Subscription(models.Model):
         verbose_name="Статус",
     )
     max_devices = models.PositiveSmallIntegerField(
-        default=3,
+        default=10,
         verbose_name="Лимит устройств",
     )
     traffic_used_bytes = models.PositiveBigIntegerField(
@@ -204,7 +209,7 @@ class SubscriptionDevice(models.Model):
 
 class Payment(models.Model):
     class Method(models.TextChoices):
-        BALANCE = "balance", "Баланс"
+        BALANCE = "balance", "Баланс (устаревшее)"
         EXTERNAL = "external", "Внешний платеж"
 
     class Status(models.TextChoices):
@@ -233,11 +238,18 @@ class Payment(models.Model):
     method = models.CharField(
         max_length=16,
         choices=Method.choices,
+        default=Method.EXTERNAL,
         verbose_name="Способ оплаты",
+    )
+    payment_channel = models.CharField(
+        max_length=16,
+        blank=True,
+        default="sbp",
+        verbose_name="Метод шлюза (sbp/crypto)",
     )
     provider = models.CharField(
         max_length=32,
-        default="stub",
+        default="platega",
         verbose_name="Провайдер",
     )
     external_id = models.CharField(
@@ -245,7 +257,7 @@ class Payment(models.Model):
         blank=True,
         default="",
         db_index=True,
-        verbose_name="Внешний ID счета",
+        verbose_name="ID транзакции в Platega",
     )
     amount_kopeks = models.PositiveBigIntegerField(verbose_name="Сумма (копейки)")
     status = models.CharField(
@@ -296,19 +308,29 @@ class ReferralReward(models.Model):
         related_name="generated_referral_rewards",
         verbose_name="Реферал",
     )
-    payment = models.OneToOneField(
+    payment = models.ForeignKey(
         Payment,
         on_delete=models.CASCADE,
-        related_name="referral_reward",
+        related_name="referral_rewards",
         verbose_name="Платеж",
     )
-    amount_kopeks = models.PositiveBigIntegerField(verbose_name="Начислено (копейки)")
+    bonus_hours = models.PositiveIntegerField(default=0, verbose_name="Бонус (часов к подписке)")
+    amount_kopeks = models.PositiveBigIntegerField(
+        default=0,
+        verbose_name="Сумма (копейки, устаревшее)",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Создано")
 
     class Meta:
         verbose_name = "Реферальный бонус"
         verbose_name_plural = "Реферальные бонусы"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["referrer", "payment"],
+                name="uniq_referral_reward_per_payment",
+            )
+        ]
 
     def __str__(self) -> str:
-        return f"{self.referrer} +{self.amount_kopeks} коп. от {self.referred_user}"
+        return f"{self.referrer} +{self.bonus_hours} ч. от {self.referred_user}"

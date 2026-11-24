@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     BotAcceptLegalView,
     BotGetOrCreateUserView,
+    EmailOtpRequestView,
+    EmailOtpVerifyView,
     TelegramAuthConfirmView,
     TelegramAuthInitView,
     TelegramAuthStatusView,
@@ -20,6 +22,8 @@ urlpatterns = [
         name="tg-auth-status",
     ),
     path("telegram-auth/confirm/", TelegramAuthConfirmView.as_view(), name="tg-auth-confirm"),
+    path("email-auth/request/", EmailOtpRequestView.as_view(), name="email-auth-request"),
+    path("email-auth/verify/", EmailOtpVerifyView.as_view(), name="email-auth-verify"),
     path("me/", WebMeView.as_view(), name="web-me"),
     path("logout/", WebLogoutView.as_view(), name="web-logout"),
 ]

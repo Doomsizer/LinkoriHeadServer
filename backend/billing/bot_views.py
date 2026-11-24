@@ -9,20 +9,22 @@ from accounts.permissions import HasBotToken
 from .models import Payment, Plan, ReferralReward, SubscriptionDevice
 from .services import (
     BillingError,
-    create_external_payment,
+    create_platega_or_stub_payment,
     finalize_paid_payment,
     format_iso_utc,
     get_active_subscription,
-    pay_with_balance,
     serialize_plan,
     serialize_subscription,
+    sync_payment_status_with_provider,
 )
 
 
 class BotPaymentCreateSerializer(serializers.Serializer):
     telegram_id = serializers.IntegerField(min_value=1)
     plan_id = serializers.IntegerField(min_value=1)
-    method = serializers.ChoiceField(choices=["balance", "external"])
+    method = serializers.ChoiceField(choices=["balance", "external"], default="external")
+    payment_method = serializers.ChoiceField(choices=["sbp", "crypto"], default="sbp")
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True, default="")
 
 
 class BotProfileView(APIView):
@@ -35,8 +37,8 @@ class BotProfileView(APIView):
             return Response({"detail": "Пользователь не найден"}, status=status.HTTP_404_NOT_FOUND)
 
         referrals_count = User.objects.filter(referred_by=user).count()
-        bonus_total = (
-            ReferralReward.objects.filter(referrer=user).aggregate(total=Sum("amount_kopeks"))[
+        bonus_hours = (
+            ReferralReward.objects.filter(referrer=user).aggregate(total=Sum("bonus_hours"))[
                 "total"
             ]
             or 0
@@ -47,14 +49,17 @@ class BotProfileView(APIView):
             {
                 "telegram_id": user.telegram_id,
                 "telegram_username": user.telegram_username,
+                "email": user.email,
                 "referral_code": user.referral_code,
-                "balance_kopeks": user.balance_kopeks,
+                "balance_kopeks": 0,
+                "has_used_trial": user.has_used_trial,
                 "is_legal_accepted": user.is_legal_accepted,
                 "legal_accepted_at": (
                     format_iso_utc(user.legal_accepted_at) if user.legal_accepted_at else None
                 ),
                 "referrals_count": referrals_count,
-                "referral_bonus_kopeks": bonus_total,
+                "referral_bonus_hours": bonus_hours,
+                "referral_bonus_kopeks": 0,
                 "active_subscription": serialize_subscription(active_sub) if active_sub else None,
             },
             status=status.HTTP_200_OK,
@@ -89,25 +94,28 @@ class BotPaymentCreateView(APIView):
         serializer = BotPaymentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        if serializer.validated_data["method"] == "balance":
+            return Response(
+                {"detail": "Оплата с баланса отключена. Используйте СБП или криптовалюту."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         telegram_id = serializer.validated_data["telegram_id"]
         plan_id = serializer.validated_data["plan_id"]
-        method = serializer.validated_data["method"]
+        payment_channel = serializer.validated_data["payment_method"]
+        email = (serializer.validated_data.get("email") or "").strip()
+
+        user = User.objects.filter(telegram_id=telegram_id).first()
+        if user is None:
+            return Response({"detail": "Пользователь не найден"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            if method == "balance":
-                payment, sub = pay_with_balance(telegram_id=telegram_id, plan_id=plan_id)
-                return Response(
-                    {
-                        "status": "paid",
-                        "payment_id": payment.payment_id,
-                        "payment_url": None,
-                        "message": "Оплачено с баланса",
-                        "subscription": serialize_subscription(sub),
-                    },
-                    status=status.HTTP_200_OK,
-                )
-
-            payment = create_external_payment(telegram_id=telegram_id, plan_id=plan_id)
+            payment = create_platega_or_stub_payment(
+                user=user,
+                plan_id=plan_id,
+                payment_channel=payment_channel,
+                email=email,
+            )
             return Response(
                 {
                     "status": payment.status,
@@ -135,7 +143,9 @@ class BotPaymentStatusView(APIView):
         if payment is None:
             return Response({"detail": "Платеж не найден"}, status=status.HTTP_404_NOT_FOUND)
 
-        if payment.status == Payment.Status.PAID and payment.subscription is None:
+        if payment.status == Payment.Status.PENDING:
+            payment = sync_payment_status_with_provider(payment)
+        elif payment.status == Payment.Status.PAID and payment.subscription is None:
             try:
                 payment = finalize_paid_payment(payment.payment_id)
             except BillingError as exc:
