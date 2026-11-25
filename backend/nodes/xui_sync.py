@@ -274,6 +274,35 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
     return None
 
 
+def _get_target_inbound_ids(node: VpnNode, raw_inbounds: list[dict]) -> list[int]:
+    target_inbound_ids: list[int] = []
+    for raw in raw_inbounds:
+        if not raw.get("enable", True):
+            continue
+        parsed = parse_xui_inbound(node, raw)
+        if parsed is not None:
+            target_inbound_ids.append(parsed["xui_inbound_id"])
+    return target_inbound_ids
+
+
+def _node_client_flow(raw_inbounds: list[dict]) -> str:
+    """
+    flow=xtls-rprx-vision нужен только при наличии чистого TCP Reality.
+    При gRPC / WS / Hysteria 2 flow должен быть пустым.
+    """
+    for raw in raw_inbounds:
+        if not raw.get("enable", True):
+            continue
+        if str(raw.get("protocol", "")).lower().strip() != "vless":
+            continue
+        stream = _parse_json_field(raw.get("streamSettings"))
+        network = str(stream.get("network", "tcp")).lower().strip()
+        security = str(stream.get("security", "none")).lower().strip()
+        if security == "reality" and network in ("tcp", "raw", ""):
+            return "xtls-rprx-vision"
+    return ""
+
+
 def _get_xui_client(
     client: httpx.Client,
     base_url: str,
@@ -316,19 +345,21 @@ def _update_xui_client(
     email: str,
     current_client: dict,
     target_uuid: str,
+    client_flow: str,
     enable: bool,
     expiry_time_ms: int,
     total_gb_bytes: int,
     tg_id_int: int,
 ):
     email_q = quote(email, safe="")
+    # ВАЖНО: в model.Client у 3x-ui поле для UUID называется "id" (строка UUID)
     merged_client = dict(current_client)
-    merged_client.pop("id", None)
     merged_client.pop("allowedIPs", None)
-    merged_client["email"] = email
+    merged_client["id"] = target_uuid
     merged_client["uuid"] = target_uuid
     merged_client["auth"] = target_uuid
-    merged_client["flow"] = "xtls-rprx-vision"
+    merged_client["email"] = email
+    merged_client["flow"] = client_flow
     merged_client["enable"] = bool(enable)
     merged_client["expiryTime"] = int(expiry_time_ms)
     merged_client["totalGB"] = int(total_gb_bytes)
@@ -353,6 +384,7 @@ def _update_xui_client(
 def ensure_probe_admin_client_on_panel(
     node: VpnNode,
     target_inbound_ids: list[int],
+    client_flow: str = "",
     timeout: float = 10.0,
 ) -> uuid.UUID | None:
     if not target_inbound_ids:
@@ -377,10 +409,10 @@ def ensure_probe_admin_client_on_panel(
             add_url = f"{base_url}/panel/api/clients/add"
             payload = {
                 "client": {
-                    "email": PROBE_ADMIN_EMAIL,
-                    "uuid": admin_uuid_str,
+                    "id": admin_uuid_str,
                     "auth": admin_uuid_str,
-                    "flow": "xtls-rprx-vision",
+                    "email": PROBE_ADMIN_EMAIL,
+                    "flow": client_flow,
                     "totalGB": 0,
                     "expiryTime": 0,
                     "limitIp": 0,
@@ -404,7 +436,6 @@ def ensure_probe_admin_client_on_panel(
                     f"{add_data.get('msg', 'unknown')}"
                 )
 
-            # 3x-ui v3.x при clients/add игнорирует uuid — дожимаем нужный uuid и flow через update
             created_obj, _ = _get_xui_client(
                 client, base_url, headers, node.name, PROBE_ADMIN_EMAIL
             )
@@ -412,7 +443,7 @@ def ensure_probe_admin_client_on_panel(
                 cur = created_obj.get("client") or {}
                 if (
                     str(cur.get("uuid") or "").lower() != admin_uuid_str.lower()
-                    or str(cur.get("flow") or "") != "xtls-rprx-vision"
+                    or str(cur.get("flow") or "") != client_flow
                 ):
                     _update_xui_client(
                         client=client,
@@ -422,6 +453,7 @@ def ensure_probe_admin_client_on_panel(
                         email=PROBE_ADMIN_EMAIL,
                         current_client=cur,
                         target_uuid=admin_uuid_str,
+                        client_flow=client_flow,
                         enable=True,
                         expiry_time_ms=0,
                         total_gb_bytes=0,
@@ -445,7 +477,7 @@ def ensure_probe_admin_client_on_panel(
 
         needs_update = (
             not current_client.get("enable", True)
-            or str(current_client.get("flow") or "") != "xtls-rprx-vision"
+            or str(current_client.get("flow") or "") != client_flow
             or panel_uuid_str.lower() != target_uuid_str.lower()
             or str(current_client.get("auth") or "").lower() != target_uuid_str.lower()
         )
@@ -458,6 +490,7 @@ def ensure_probe_admin_client_on_panel(
                 email=PROBE_ADMIN_EMAIL,
                 current_client=current_client,
                 target_uuid=target_uuid_str,
+                client_flow=client_flow,
                 enable=True,
                 expiry_time_ms=0,
                 total_gb_bytes=0,
@@ -541,8 +574,11 @@ def sync_node_inbounds(node: VpnNode) -> SyncResult:
     result.disabled = stale_qs.update(is_enabled=False)
 
     probe_ids = enabled_xui_ids or seen_xui_ids
+    client_flow = _node_client_flow(raw_inbounds)
     if probe_ids:
-        resolved_uuid = ensure_probe_admin_client_on_panel(node, probe_ids)
+        resolved_uuid = ensure_probe_admin_client_on_panel(
+            node, probe_ids, client_flow=client_flow
+        )
         if resolved_uuid and node.probe_xray_uuid != resolved_uuid:
             node.probe_xray_uuid = resolved_uuid
             node.save(update_fields=["probe_xray_uuid"])
@@ -554,23 +590,13 @@ def sync_node_inbounds(node: VpnNode) -> SyncResult:
     return result
 
 
-def _get_target_inbound_ids(node: VpnNode, raw_inbounds: list[dict]) -> list[int]:
-    target_inbound_ids: list[int] = []
-    for raw in raw_inbounds:
-        if not raw.get("enable", True):
-            continue
-        parsed = parse_xui_inbound(node, raw)
-        if parsed is not None:
-            target_inbound_ids.append(parsed["xui_inbound_id"])
-    return target_inbound_ids
-
-
 def _sync_single_user_on_open_client(
     client: httpx.Client,
     base_url: str,
     headers: dict[str, str],
     node: VpnNode,
     target_inbound_ids: list[int],
+    client_flow: str,
     user,
     expires_at_ms: int = 0,
     enable: bool = True,
@@ -592,10 +618,10 @@ def _sync_single_user_on_open_client(
         add_url = f"{base_url}/panel/api/clients/add"
         payload = {
             "client": {
-                "email": client_email,
-                "uuid": user_uuid,
+                "id": user_uuid,
                 "auth": user_uuid,
-                "flow": "xtls-rprx-vision",
+                "email": client_email,
+                "flow": client_flow,
                 "totalGB": int(total_gb_bytes),
                 "expiryTime": int(expires_at_ms),
                 "limitIp": 0,
@@ -617,7 +643,6 @@ def _sync_single_user_on_open_client(
                 f"{add_data.get('msg', 'unknown')}"
             )
 
-        # 3x-ui v3.x при clients/add генерирует случайный uuid — сразу перезаписываем на единый user_uuid
         created_obj, _ = _get_xui_client(
             client, base_url, headers, node.name, client_email
         )
@@ -625,7 +650,7 @@ def _sync_single_user_on_open_client(
             cur = created_obj.get("client") or {}
             if (
                 str(cur.get("uuid") or "").lower() != user_uuid.lower()
-                or str(cur.get("flow") or "") != "xtls-rprx-vision"
+                or str(cur.get("flow") or "") != client_flow
             ):
                 _update_xui_client(
                     client=client,
@@ -635,6 +660,7 @@ def _sync_single_user_on_open_client(
                     email=client_email,
                     current_client=cur,
                     target_uuid=user_uuid,
+                    client_flow=client_flow,
                     enable=True,
                     expiry_time_ms=int(expires_at_ms),
                     total_gb_bytes=int(total_gb_bytes),
@@ -660,7 +686,7 @@ def _sync_single_user_on_open_client(
         or cur_enable != bool(enable)
         or cur_expiry != int(expires_at_ms)
         or cur_total != int(total_gb_bytes)
-        or cur_flow != "xtls-rprx-vision"
+        or cur_flow != client_flow
     )
 
     updated = 0
@@ -673,6 +699,7 @@ def _sync_single_user_on_open_client(
             email=client_email,
             current_client=current_client,
             target_uuid=user_uuid,
+            client_flow=client_flow,
             enable=bool(enable),
             expiry_time_ms=int(expires_at_ms),
             total_gb_bytes=int(total_gb_bytes),
@@ -724,6 +751,7 @@ def sync_user_subscription_on_panel(
     headers = _build_auth_headers(node)
     raw_inbounds = fetch_xui_inbounds(node, timeout=timeout)
     target_inbound_ids = _get_target_inbound_ids(node, raw_inbounds)
+    client_flow = _node_client_flow(raw_inbounds)
 
     if not target_inbound_ids:
         return {"added": 0, "existing": 0, "attached": 0, "updated": 0}
@@ -739,6 +767,7 @@ def sync_user_subscription_on_panel(
             headers=headers,
             node=node,
             target_inbound_ids=target_inbound_ids,
+            client_flow=client_flow,
             user=user,
             expires_at_ms=expires_at_ms,
             enable=enable,
@@ -755,6 +784,7 @@ def sync_active_subscriptions_to_node(
     headers = _build_auth_headers(node)
     raw_inbounds = fetch_xui_inbounds(node, timeout=timeout)
     target_inbound_ids = _get_target_inbound_ids(node, raw_inbounds)
+    client_flow = _node_client_flow(raw_inbounds)
 
     if not target_inbound_ids:
         return {"added": 0, "updated": 0, "attached": 0, "errors": 0}
@@ -777,6 +807,7 @@ def sync_active_subscriptions_to_node(
                     headers=headers,
                     node=node,
                     target_inbound_ids=target_inbound_ids,
+                    client_flow=client_flow,
                     user=entry["user"],
                     expires_at_ms=entry["expires_at_ms"],
                     enable=True,
