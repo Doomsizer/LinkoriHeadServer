@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -22,6 +23,13 @@ class SyncResult:
     disabled: int = 0
     skipped: int = 0
     probe_uuid: str = ""
+
+
+def _clean_node_label(node_name: str) -> str:
+    cleaned = re.sub(r"[\[\(]\s*\d+\s*[\]\)]", "", node_name)
+    cleaned = re.sub(r"\d+", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -_[]()")
+    return cleaned or node_name.strip()
 
 
 def _normalize_panel_base_url(panel_url: str) -> str:
@@ -144,10 +152,10 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
     if raw_port <= 0:
         return None
 
-    base_name = f"[Pr 👑] {node.name}"
+    display_name = f"[Pr 👑] {_clean_node_label(node.name)}"
     is_enabled = bool(raw_inbound.get("enable", True))
 
-    # 1. VLESS Reality
+    # 1. VLESS Reality (TCP / RAW / gRPC)
     if xui_protocol == "vless" and security == "reality":
         reality = stream.get("realitySettings") or {}
         reality_inner = reality.get("settings") or {}
@@ -156,12 +164,15 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
         clients = settings_data.get("clients") or []
         first_client = clients[0] if isinstance(clients, list) and clients else {}
 
+        net_type = "tcp" if network in ("tcp", "raw", "") else network
         flow = str(first_client.get("flow", "")).strip()
-        if not flow and network in ("tcp", "raw", ""):
+        if net_type == "grpc":
+            flow = ""
+        elif not flow and net_type == "tcp":
             flow = "xtls-rprx-vision"
 
-        extra_params = {
-            "type": "tcp" if network in ("tcp", "raw", "") else network,
+        extra_params: dict = {
+            "type": net_type,
             "pbk": str(reality_inner.get("publicKey") or reality.get("publicKey") or "").strip(),
             "fp": str(
                 reality_inner.get("fingerprint") or reality.get("fingerprint") or "chrome"
@@ -171,10 +182,17 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
             "spx": str(reality_inner.get("spiderX") or reality.get("spiderX") or "/").strip(),
             "flow": flow,
         }
+
+        if net_type == "grpc":
+            grpc = stream.get("grpcSettings") or {}
+            extra_params["service_name"] = str(grpc.get("serviceName") or "").strip()
+            extra_params["multi_mode"] = bool(grpc.get("multiMode", False))
+            extra_params["authority"] = str(grpc.get("authority") or "").strip()
+
         return {
             "xui_inbound_id": int(xui_id),
             "protocol": NodeInbound.Protocol.VLESS_REALITY,
-            "display_name": base_name,
+            "display_name": display_name,
             "connect_host": str(node.ip_address),
             "connect_port": int(ext_port) if ext_port else raw_port,
             "extra_params": extra_params,
@@ -214,7 +232,7 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
         return {
             "xui_inbound_id": int(xui_id),
             "protocol": NodeInbound.Protocol.VLESS_WS,
-            "display_name": f"{base_name} CDN",
+            "display_name": display_name,
             "connect_host": connect_host,
             "connect_port": 443,
             "extra_params": extra_params,
@@ -243,7 +261,7 @@ def parse_xui_inbound(node: VpnNode, raw_inbound: dict) -> dict | None:
         return {
             "xui_inbound_id": int(xui_id),
             "protocol": NodeInbound.Protocol.HYSTERIA2,
-            "display_name": f"{base_name} (игровой 🎮)",
+            "display_name": display_name,
             "connect_host": str(node.ip_address),
             "connect_port": int(ext_port) if ext_port else raw_port,
             "extra_params": extra_params,
@@ -258,10 +276,6 @@ def ensure_probe_admin_client_on_panel(
     target_inbound_ids: list[int],
     timeout: float = 10.0,
 ) -> uuid.UUID | None:
-    """
-    Создает или проверяет сервисного админ-клиента (linkori_probe_admin) на панели 3x-ui
-    с flow=xtls-rprx-vision и сохраняет его UUID в node.probe_xray_uuid.
-    """
     if not target_inbound_ids:
         return node.probe_xray_uuid
 
@@ -342,7 +356,6 @@ def ensure_probe_admin_client_on_panel(
         except ValueError:
             resolved_uuid = node.probe_xray_uuid or uuid.uuid4()
 
-        # Если клиент есть, при необходимости обновляем flow/enable и допривязываем новые инбаунды
         needs_update = (
             not current_client.get("enable", True)
             or current_client.get("flow") != "xtls-rprx-vision"
@@ -667,147 +680,5 @@ def sync_user_subscription_on_all_panels(
         "clients_existing": total_existing,
         "clients_attached": total_attached,
         "clients_updated": total_updated,
-        "errors": errors,
-    }
-
-
-def ensure_user_on_panel(node: VpnNode, user, timeout: float = 10.0) -> dict:
-    base_url = _normalize_panel_base_url(node.panel_url)
-    headers = _build_auth_headers(node)
-    raw_inbounds = fetch_xui_inbounds(node, timeout=timeout)
-
-    target_inbound_ids: list[int] = []
-    for raw in raw_inbounds:
-        if not raw.get("enable", True):
-            continue
-        parsed = parse_xui_inbound(node, raw)
-        if parsed is not None:
-            target_inbound_ids.append(parsed["xui_inbound_id"])
-
-    if not target_inbound_ids:
-        return {"added": 0, "existing": 0, "attached": 0}
-
-    user_uuid = str(user.xray_uuid)
-    tg_id_int = int(user.telegram_id) if user.telegram_id else 0
-    client_email = f"tg_{user.telegram_id}" if user.telegram_id else f"user_{user.id}"
-    email_q = quote(client_email, safe="")
-
-    with httpx.Client(
-        timeout=timeout,
-        verify=node.panel_verify_ssl,
-        follow_redirects=True,
-    ) as client:
-        get_url = f"{base_url}/panel/api/clients/get/{email_q}"
-        try:
-            get_resp = client.get(get_url, headers=headers)
-        except httpx.HTTPError as exc:
-            raise XuiSyncError(f"Ошибка проверки клиента на «{node.name}»: {exc}") from exc
-
-        client_exists = False
-        existing_inbound_ids: set[int] = set()
-
-        if get_resp.status_code == 200:
-            try:
-                get_data = get_resp.json()
-            except ValueError as exc:
-                raise XuiSyncError(
-                    f"Некорректный JSON от {get_url} на «{node.name}»"
-                ) from exc
-            if get_data.get("success") and isinstance(get_data.get("obj"), dict):
-                client_exists = True
-                raw_ids = get_data["obj"].get("inboundIds") or []
-                existing_inbound_ids = {int(i) for i in raw_ids}
-        elif get_resp.status_code != 404:
-            raise XuiSyncError(
-                f"Неожиданный статус {get_resp.status_code} от {get_url} на «{node.name}»"
-            )
-
-        if not client_exists:
-            add_url = f"{base_url}/panel/api/clients/add"
-            payload = {
-                "client": {
-                    "email": client_email,
-                    "uuid": user_uuid,
-                    "auth": user_uuid,
-                    "flow": "xtls-rprx-vision",
-                    "totalGB": 0,
-                    "expiryTime": 0,
-                    "limitIp": 0,
-                    "enable": True,
-                    "tgId": tg_id_int,
-                },
-                "inboundIds": target_inbound_ids,
-            }
-            try:
-                add_resp = client.post(add_url, headers=headers, json=payload)
-                add_resp.raise_for_status()
-                add_data = add_resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                raise XuiSyncError(
-                    f"Ошибка clients/add на ноде «{node.name}»: {exc}"
-                ) from exc
-
-            if not add_data.get("success"):
-                raise XuiSyncError(
-                    f"3x-ui отклонила clients/add на «{node.name}»: "
-                    f"{add_data.get('msg', 'unknown')}"
-                )
-            return {"added": len(target_inbound_ids), "existing": 0, "attached": 0}
-
-        missing_ids = [i for i in target_inbound_ids if i not in existing_inbound_ids]
-        attached = 0
-        if missing_ids:
-            attach_url = f"{base_url}/panel/api/clients/{email_q}/attach"
-            try:
-                att_resp = client.post(
-                    attach_url,
-                    headers=headers,
-                    json={"inboundIds": missing_ids},
-                )
-                att_resp.raise_for_status()
-                att_data = att_resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                raise XuiSyncError(
-                    f"Ошибка clients/attach на ноде «{node.name}»: {exc}"
-                ) from exc
-
-            if not att_data.get("success"):
-                raise XuiSyncError(
-                    f"3x-ui отклонила clients/attach на «{node.name}»: "
-                    f"{att_data.get('msg', 'unknown')}"
-                )
-            attached = len(missing_ids)
-
-        return {
-            "added": 0,
-            "existing": len(existing_inbound_ids & set(target_inbound_ids)),
-            "attached": attached,
-        }
-
-
-def ensure_user_on_all_panels(user) -> dict:
-    nodes = VpnNode.objects.filter(is_enabled=True).order_by("priority", "id")
-    total_added = 0
-    total_existing = 0
-    total_attached = 0
-    errors: list[dict] = []
-
-    for node in nodes:
-        if not node.panel_api_token.strip():
-            errors.append({"node_id": node.id, "node_name": node.name, "error": "missing_api_token"})
-            continue
-        try:
-            res = ensure_user_on_panel(node, user)
-            total_added += res["added"]
-            total_existing += res["existing"]
-            total_attached += res["attached"]
-        except XuiSyncError as exc:
-            errors.append({"node_id": node.id, "node_name": node.name, "error": str(exc)})
-
-    return {
-        "nodes_total": nodes.count(),
-        "clients_added": total_added,
-        "clients_existing": total_existing,
-        "clients_attached": total_attached,
         "errors": errors,
     }

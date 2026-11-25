@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import F
 from django.http import HttpResponse
@@ -18,6 +19,7 @@ from sub_gateway.uri_builder import build_inbound_uri
 from .models import ProbeSnapshot, WorkingPublicConfig, hash_uri
 from .permissions import HasProbeToken
 from .serializers import ProbeReportSerializer
+from .tasks import send_probe_status_alert
 
 
 def _uri_protocol_family(uri: str) -> str:
@@ -70,6 +72,14 @@ def _recompute_overall_inbound_status(inbound: NodeInbound):
         inbound.last_latency_ms = min(latencies)
 
 
+def _get_network_status(inbound: NodeInbound, network_type: str | None) -> str:
+    if network_type == "lte":
+        return inbound.lte_health_status
+    if network_type == "wifi":
+        return inbound.wifi_health_status
+    return inbound.health_status
+
+
 def _apply_inbound_probe_result(
     inbound: NodeInbound,
     network_type: str | None,
@@ -77,8 +87,10 @@ def _apply_inbound_probe_result(
     latency_ms: int | None,
     now,
     keep_existing_latency: bool = False,
-):
+) -> tuple[str, str]:
+    prev_status = _get_network_status(inbound, network_type)
     new_status = NodeInbound.HealthStatus.ONLINE if is_alive else NodeInbound.HealthStatus.OFFLINE
+
     if network_type == "lte":
         inbound.lte_health_status = new_status
         if not is_alive:
@@ -112,6 +124,7 @@ def _apply_inbound_probe_result(
             "last_checked_at",
         ]
     )
+    return prev_status, new_status
 
 
 class ProbeNodesListView(APIView):
@@ -191,10 +204,6 @@ class ProbeNodesListView(APIView):
 
 
 class ProbeReportView(APIView):
-    """
-    Принимает рабочие ссылки от стенда (строками или объектами {uri, source, latency_ms}).
-    """
-
     authentication_classes = []
     permission_classes = [HasProbeToken]
 
@@ -239,6 +248,21 @@ class ProbeReportView(APIView):
 
         config_hash = hashlib.sha256("\n".join(all_configs).encode("utf-8")).hexdigest()
         now = timezone.now()
+
+        failed_alerts: list[str] = []
+        recovered_alerts: list[str] = []
+
+        def _track_alert(inb: NodeInbound, prev_st: str, new_st: str):
+            net_key = resolved_net or "all"
+            cd_key = f"probe_alert_cd:{inb.id}:{net_key}"
+            label = f"{inb.node.name} ({inb.connect_host}:{inb.connect_port}, {inb.get_protocol_display()})"
+            if new_st == NodeInbound.HealthStatus.OFFLINE:
+                if prev_st != NodeInbound.HealthStatus.OFFLINE or not cache.get(cd_key):
+                    cache.set(cd_key, 1, timeout=settings.PROBE_ALERT_COOLDOWN_SECONDS)
+                    failed_alerts.append(label)
+            elif new_st == NodeInbound.HealthStatus.ONLINE and prev_st == NodeInbound.HealthStatus.OFFLINE:
+                cache.delete(cd_key)
+                recovered_alerts.append(label)
 
         with transaction.atomic():
             prev_snapshot = (
@@ -347,13 +371,14 @@ class ProbeReportView(APIView):
                     inb = inbound_map.get(item["inbound_id"])
                     if inb is None:
                         continue
-                    _apply_inbound_probe_result(
+                    prev_st, new_st = _apply_inbound_probe_result(
                         inbound=inb,
                         network_type=resolved_net,
                         is_alive=item["is_alive"],
                         latency_ms=item.get("latency_ms"),
                         now=now,
                     )
+                    _track_alert(inb, prev_st, new_st)
                     updated_own_count += 1
             elif sync_own:
                 for inb in enabled_inbounds:
@@ -362,7 +387,7 @@ class ProbeReportView(APIView):
                     key_ip = (fam, str(inb.node.ip_address).lower(), int(inb.connect_port))
                     is_alive = key_host in working_own_endpoints or key_ip in working_own_endpoints
                     lat = own_latencies_by_ep.get(key_host) or own_latencies_by_ep.get(key_ip)
-                    _apply_inbound_probe_result(
+                    prev_st, new_st = _apply_inbound_probe_result(
                         inbound=inb,
                         network_type=resolved_net,
                         is_alive=is_alive,
@@ -370,7 +395,16 @@ class ProbeReportView(APIView):
                         now=now,
                         keep_existing_latency=True,
                     )
+                    _track_alert(inb, prev_st, new_st)
                     updated_own_count += 1
+
+            if failed_alerts or recovered_alerts:
+                net_label = (resolved_net or source or "all").upper()
+                f_copy = list(failed_alerts)
+                r_copy = list(recovered_alerts)
+                transaction.on_commit(
+                    lambda: send_probe_status_alert.delay(net_label, f_copy, r_copy)
+                )
 
         return Response(
             {

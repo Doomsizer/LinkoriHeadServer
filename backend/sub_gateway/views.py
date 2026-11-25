@@ -125,18 +125,13 @@ def _inbound_protocol_family(inbound: NodeInbound) -> str:
 
 
 def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
-    base_qs = NodeInbound.objects.select_related("node").filter(
-        is_enabled=True,
-        node__is_enabled=True,
+    # Все наши включенные инбаунды всегда попадают в подписку (при падении шлем алерт админу)
+    inbounds = list(
+        NodeInbound.objects.select_related("node").filter(
+            is_enabled=True,
+            node__is_enabled=True,
+        )
     )
-    live_statuses = [NodeInbound.HealthStatus.ONLINE, NodeInbound.HealthStatus.DEGRADED]
-
-    if network_type == "lte":
-        inbounds = list(base_qs.filter(lte_health_status__in=live_statuses))
-    elif network_type == "wifi":
-        inbounds = list(base_qs.filter(wifi_health_status__in=live_statuses))
-    else:
-        inbounds = list(base_qs.filter(health_status__in=live_statuses))
 
     def inbound_sort_key(inb: NodeInbound):
         tier, c_prio, c_code = get_country_rank(inb.node.country_code)

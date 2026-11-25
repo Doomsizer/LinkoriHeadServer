@@ -60,18 +60,27 @@ def build_vless_reality_uri(
 ) -> str:
     extra = inbound.extra_params or {}
     host = _format_host(inbound.connect_host)
-    query = _clean_query(
-        {
-            "type": extra.get("type", "tcp"),
-            "security": "reality",
-            "pbk": extra.get("pbk", ""),
-            "fp": extra.get("fp", "chrome"),
-            "sni": extra.get("sni", ""),
-            "sid": extra.get("sid", ""),
-            "spx": extra.get("spx", "/"),
-            "flow": extra.get("flow", "xtls-rprx-vision"),
-        }
-    )
+    net_type = str(extra.get("type", "tcp") or "tcp").lower()
+    flow = "" if net_type == "grpc" else str(extra.get("flow", "xtls-rprx-vision") or "")
+
+    query_params: dict[str, str | int | None] = {
+        "type": net_type,
+        "security": "reality",
+        "pbk": extra.get("pbk", ""),
+        "fp": extra.get("fp", "chrome"),
+        "sni": extra.get("sni", ""),
+        "sid": extra.get("sid", ""),
+        "spx": extra.get("spx", "/"),
+        "flow": flow,
+    }
+    if net_type == "grpc":
+        query_params["serviceName"] = extra.get("service_name", "")
+        if extra.get("multi_mode"):
+            query_params["mode"] = "multi"
+        if extra.get("authority"):
+            query_params["authority"] = extra.get("authority")
+
+    query = _clean_query(query_params)
     remark = _build_remark(inbound, remark_override=remark_override)
     return f"vless://{subscription.xray_uuid}@{host}:{inbound.connect_port}?{query}#{remark}"
 
@@ -153,6 +162,21 @@ def _get_inbound_latency(inbound: NodeInbound, network_type: str | None) -> int 
     return inbound.last_latency_ms
 
 
+def _get_inbound_health_rank(inbound: NodeInbound, network_type: str | None) -> int:
+    status = (
+        inbound.lte_health_status
+        if network_type == "lte"
+        else (inbound.wifi_health_status if network_type == "wifi" else inbound.health_status)
+    )
+    if status == NodeInbound.HealthStatus.ONLINE:
+        return 0
+    if status == NodeInbound.HealthStatus.DEGRADED:
+        return 1
+    if status == NodeInbound.HealthStatus.UNKNOWN:
+        return 2
+    return 3
+
+
 def select_best_inbound(
     inbounds: list[NodeInbound],
     network_type: str | None = None,
@@ -161,8 +185,9 @@ def select_best_inbound(
         return None, None
 
     def sort_key(inb: NodeInbound):
+        h_rank = _get_inbound_health_rank(inb, network_type)
         lat = _get_inbound_latency(inb, network_type)
-        return (lat is None, lat if lat is not None else 10**9, inb.node.priority, inb.id)
+        return (h_rank, lat is None, lat if lat is not None else 10**9, inb.node.priority, inb.id)
 
     best = min(inbounds, key=sort_key)
     return best, _get_inbound_latency(best, network_type)
@@ -221,25 +246,36 @@ def _inbound_to_xray_outbound(
     remark = _build_plain_remark(inbound)
 
     if inbound.protocol == NodeInbound.Protocol.VLESS_REALITY:
-        flow = str(extra.get("flow", "xtls-rprx-vision") or "").strip()
+        net_type = str(extra.get("type", "tcp") or "tcp").lower()
+        flow = "" if net_type == "grpc" else str(extra.get("flow", "xtls-rprx-vision") or "").strip()
         user_obj = {"id": str(subscription.xray_uuid), "encryption": "none"}
         if flow:
             user_obj["flow"] = flow
+
+        stream: dict = {
+            "network": net_type,
+            "security": "reality",
+            "realitySettings": {
+                "publicKey": str(extra.get("pbk", "")),
+                "fingerprint": str(extra.get("fp", "chrome") or "chrome"),
+                "serverName": str(extra.get("sni", "")),
+                "shortId": str(extra.get("sid", "")),
+                "spiderX": str(extra.get("spx", "/") or "/"),
+            },
+        }
+        if net_type == "grpc":
+            grpc_settings: dict = {"serviceName": str(extra.get("service_name", "") or "")}
+            if extra.get("multi_mode"):
+                grpc_settings["multiMode"] = True
+            if extra.get("authority"):
+                grpc_settings["authority"] = str(extra.get("authority"))
+            stream["grpcSettings"] = grpc_settings
+
         return remark, {
             "tag": tag,
             "protocol": "vless",
             "settings": {"vnext": [{"address": host, "port": port, "users": [user_obj]}]},
-            "streamSettings": {
-                "network": str(extra.get("type", "tcp") or "tcp"),
-                "security": "reality",
-                "realitySettings": {
-                    "publicKey": str(extra.get("pbk", "")),
-                    "fingerprint": str(extra.get("fp", "chrome") or "chrome"),
-                    "serverName": str(extra.get("sni", "")),
-                    "shortId": str(extra.get("sid", "")),
-                    "spiderX": str(extra.get("spx", "/") or "/"),
-                },
-            },
+            "streamSettings": stream,
         }
 
     if inbound.protocol == NodeInbound.Protocol.VLESS_WS:
@@ -249,7 +285,7 @@ def _inbound_to_xray_outbound(
         alpn_str = str(extra.get("alpn", "http/1.1") or "http/1.1")
         alpn_list = [x.strip() for x in alpn_str.split(",") if x.strip()]
 
-        stream: dict = {
+        stream = {
             "network": "ws",
             "security": security,
             "wsSettings": {
@@ -339,7 +375,7 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
             return None
         net_type = q("type", "tcp").lower() or "tcp"
         security = q("security", "none").lower() or "none"
-        flow = q("flow", "").strip()
+        flow = "" if net_type == "grpc" else q("flow", "").strip()
         encryption = q("encryption", "none") or "none"
 
         user_obj = {"id": uuid_str, "encryption": encryption}
@@ -380,6 +416,8 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
                 grpc_settings["serviceName"] = q("serviceName")
             if q("mode"):
                 grpc_settings["multiMode"] = q("mode") == "multi"
+            if q("authority"):
+                grpc_settings["authority"] = q("authority")
             stream["grpcSettings"] = grpc_settings
 
         return remark, {
@@ -500,7 +538,6 @@ def build_happ_json_payload(
     inbound_list = list(inbounds)
     public_uris = [u.strip() for u in extra_uris if u and u.strip()]
 
-    # Сортируем наши инбаунды так, чтобы лучший по известной задержке был fallbackTag ("proxy-0")
     best_inbound, _ = select_best_inbound(inbound_list, network_type=network_type)
     ordered_inbounds = list(inbound_list)
     if best_inbound is not None and best_inbound in ordered_inbounds:
@@ -526,7 +563,6 @@ def build_happ_json_payload(
 
     configs: list[dict] = []
 
-    # 1. Авто-профиль «⚡ Лучший сервер» с burstObservatory + leastPing + автопереключением
     auto_outbounds = [outbound for _, outbound in entries]
     configs.append(
         _make_xray_skeleton(
@@ -536,7 +572,6 @@ def build_happ_json_payload(
         )
     )
 
-    # 2. Отдельные серверы для ручного выбора
     for remark, outbound in entries:
         single_outbound = dict(outbound)
         single_outbound["tag"] = "proxy"

@@ -180,12 +180,15 @@ SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 SUB_ANNOUNCE_TEXT = os.getenv("SUB_ANNOUNCE_TEXT", "Сайт: linkori.org | Бот: @linkoribot")
 SUB_ANNOUNCE_URL = os.getenv("SUB_ANNOUNCE_URL", "https://t.me/linkoribot")
 
-# Токены внутренних интеграций и Telegram-бот
+# Токены внутренних интеграций, Telegram-бот и алерты админу
 PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
 PROBE_XRAY_UUID = os.getenv("PROBE_XRAY_UUID", "")
+PROBE_ALERT_COOLDOWN_SECONDS = int(os.getenv("PROBE_ALERT_COOLDOWN_SECONDS", "3600"))
 BOT_API_TOKEN = os.getenv("BOT_API_TOKEN", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "linkoribot").lstrip("@")
 TELEGRAM_AUTH_TTL_SECONDS = int(os.getenv("TELEGRAM_AUTH_TTL_SECONDS", "300"))
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "")
 
 # Почта (HTTPS API Resend по умолчанию, либо обычный SMTP)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
