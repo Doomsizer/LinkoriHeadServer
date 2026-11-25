@@ -39,7 +39,7 @@ class VpnNodeAdmin(admin.ModelAdmin):
     search_fields = ("name", "country_code", "ip_address", "panel_url", "=probe_xray_uuid")
     ordering = ("priority", "name")
     inlines = (NodeInboundInline,)
-    actions = ("sync_selected_nodes",)
+    actions = ("sync_selected_nodes", "provision_active_subs_to_nodes")
     fieldsets = (
         (
             "Основное",
@@ -67,13 +67,17 @@ class VpnNodeAdmin(admin.ModelAdmin):
         if obj.is_enabled and obj.panel_api_token.strip():
             try:
                 res = sync_node_inbounds(obj)
+                from billing.tasks import provision_active_subscriptions_to_node
+
+                provision_active_subscriptions_to_node.delay(obj.id)
                 self.message_user(
                     request,
                     (
                         f"Инбаунды ноды «{obj.name}» синхронизированы: "
                         f"создано {res.created}, обновлено {res.updated}, "
                         f"отключено {res.disabled}, пропущено {res.skipped}. "
-                        f"Админ-UUID: {res.probe_uuid or '-'}"
+                        f"Админ-UUID: {res.probe_uuid or '-'}. "
+                        f"Активные подписки поставлены в очередь на досинку."
                     ),
                     level=messages.SUCCESS,
                 )
@@ -84,17 +88,22 @@ class VpnNodeAdmin(admin.ModelAdmin):
                     level=messages.WARNING,
                 )
 
-    @admin.action(description="Синхронизировать инбаунды из 3x-ui")
+    @admin.action(description="Синхронизировать инбаунды из 3x-ui (и докинуть юзеров)")
     def sync_selected_nodes(self, request, queryset):
+        from billing.tasks import provision_active_subscriptions_to_node
+
         for node in queryset:
             try:
                 res = sync_node_inbounds(node)
+                if node.is_enabled:
+                    provision_active_subscriptions_to_node.delay(node.id)
                 self.message_user(
                     request,
                     (
                         f"Нода «{node.name}»: создано {res.created}, "
                         f"обновлено {res.updated}, отключено {res.disabled}, "
-                        f"пропущено {res.skipped}. Админ-UUID: {res.probe_uuid or '-'}"
+                        f"пропущено {res.skipped}. Админ-UUID: {res.probe_uuid or '-'}. "
+                        f"Досинка активных подписок запущена."
                     ),
                     level=messages.SUCCESS,
                 )
@@ -104,6 +113,20 @@ class VpnNodeAdmin(admin.ModelAdmin):
                     f"Ошибка синхронизации «{node.name}»: {exc}",
                     level=messages.ERROR,
                 )
+
+    @admin.action(description="Выдать доступ активным подпискам на выбранные ноды")
+    def provision_active_subs_to_nodes(self, request, queryset):
+        from billing.tasks import provision_active_subscriptions_to_node
+
+        count = 0
+        for node in queryset.filter(is_enabled=True):
+            provision_active_subscriptions_to_node.delay(node.id)
+            count += 1
+        self.message_user(
+            request,
+            f"Запущена досинка активных подписок на {count} нод(ы).",
+            level=messages.SUCCESS,
+        )
 
 
 @admin.register(NodeInbound)
@@ -133,3 +156,10 @@ class NodeInboundAdmin(admin.ModelAdmin):
     search_fields = ("display_name", "connect_host", "node__name", "node__ip_address")
     raw_id_fields = ("node",)
     readonly_fields = ("last_checked_at",)
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if obj.is_enabled and obj.node.is_enabled:
+            from billing.tasks import provision_active_subscriptions_to_node
+
+            provision_active_subscriptions_to_node.delay(obj.node_id)

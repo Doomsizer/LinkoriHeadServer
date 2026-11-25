@@ -5,7 +5,11 @@ from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
-from nodes.xui_sync import sync_user_subscription_on_all_panels
+from nodes.xui_sync import (
+    XuiSyncError,
+    sync_active_subscriptions_to_node,
+    sync_user_subscription_on_all_panels,
+)
 
 from .models import Payment, Subscription
 
@@ -27,6 +31,56 @@ def provision_subscription_to_panels(subscription_id: str):
     )
     if result["errors"]:
         logger.warning("Ошибки провижининга подписки %s: %s", subscription_id, result["errors"])
+
+
+@shared_task(ignore_result=True)
+def provision_active_subscriptions_to_node(node_id: int):
+    from nodes.models import VpnNode
+
+    node = VpnNode.objects.filter(id=node_id, is_enabled=True).first()
+    if node is None or not node.panel_api_token.strip():
+        return
+
+    now = timezone.now()
+    active_subs = (
+        Subscription.objects.select_related("user")
+        .filter(status=Subscription.Status.ACTIVE, expires_at__gt=now)
+        .order_by("user_id", "-expires_at")
+    )
+
+    by_user: dict[int, dict] = {}
+    for sub in active_subs:
+        if not sub.is_valid_now(now):
+            continue
+        uid = sub.user_id
+        cur_ms = int(sub.expires_at.timestamp() * 1000)
+        if uid not in by_user:
+            by_user[uid] = {
+                "user": sub.user,
+                "expires_at_ms": cur_ms,
+                "total_gb_bytes": sub.traffic_limit_bytes,
+            }
+        else:
+            if cur_ms > by_user[uid]["expires_at_ms"]:
+                by_user[uid]["expires_at_ms"] = cur_ms
+            if sub.traffic_limit_bytes == 0:
+                by_user[uid]["total_gb_bytes"] = 0
+
+    if not by_user:
+        return
+
+    try:
+        res = sync_active_subscriptions_to_node(node=node, entries=list(by_user.values()))
+        logger.info(
+            "Провижининг активных подписок на ноду %s: добавлено=%s, обновлено=%s, допривязано=%s, ошибок=%s",
+            node.name,
+            res["added"],
+            res["updated"],
+            res["attached"],
+            res["errors"],
+        )
+    except XuiSyncError as exc:
+        logger.warning("Ошибка провижининга подписок на ноду %s: %s", node.name, exc)
 
 
 @shared_task(ignore_result=True)
