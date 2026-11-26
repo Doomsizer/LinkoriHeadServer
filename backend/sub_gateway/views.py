@@ -19,13 +19,14 @@ from probes.country_utils import (
 )
 from probes.models import WorkingPublicConfig
 
-from .uri_builder import build_happ_json_payload, build_subscription_payload
+from .uri_builder import build_subscription_payload, build_xray_country_grouped_payload
 
 HWID_REGEX = re.compile(r"^[a-zA-Z0-9=_-]{8,128}$")
 
 MAX_ITEMS_PER_NETWORK_SUB = 30
 MAX_ITEMS_GENERAL_SUB = 40
 TAIL_EXTRA_COUNTRIES_COUNT = 5
+MAX_PUBLIC_PER_COUNTRY_IN_XRAY = 15
 
 DEEPLINK_SCHEMES = {
     "happ": ("Happ", "happ://add/{sub_url}"),
@@ -59,13 +60,14 @@ def is_browser_request(request) -> bool:
     return False
 
 
-def is_happ_json_client(request, user_agent: str) -> bool:
+def is_xray_json_client(request, user_agent: str) -> bool:
     fmt = request.GET.get("format", "").lower().strip()
     if fmt == "uri":
         return False
     if fmt in ("xray", "json"):
         return True
-    return "happ" in user_agent.lower()
+    ua = user_agent.lower()
+    return "happ" in ua or "incy" in ua
 
 
 def build_subscription_headers(
@@ -95,10 +97,22 @@ def build_subscription_headers(
         "x-hwid-active": "true",
     }
 
-    announce_text = getattr(settings, "SUB_ANNOUNCE_TEXT", "").strip()
-    if announce_text:
-        announce_b64 = base64.b64encode(announce_text.encode("utf-8")).decode("ascii")
-        headers["announce"] = f"base64:{announce_b64}"
+    user = subscription.user
+    if user.telegram_username and user.telegram_username != str(user.telegram_id):
+        user_label = f"@{user.telegram_username}"
+    elif user.telegram_id:
+        user_label = f"tg:{user.telegram_id}"
+    elif user.email:
+        user_label = user.email
+    else:
+        user_label = str(user.id)
+
+    base_announce = getattr(settings, "SUB_ANNOUNCE_TEXT", "").strip()
+    announce_text = f"{base_announce}\nID: {user_label}" if base_announce else f"ID: {user_label}"
+    announce_text = announce_text[:195]
+    announce_b64 = base64.b64encode(announce_text.encode("utf-8")).decode("ascii")
+    headers["announce"] = f"base64:{announce_b64}"
+
     announce_url = getattr(settings, "SUB_ANNOUNCE_URL", "").strip()
     if announce_url:
         headers["announce-url"] = announce_url
@@ -125,7 +139,6 @@ def _inbound_protocol_family(inbound: NodeInbound) -> str:
 
 
 def _select_live_inbounds(network_type: str | None) -> list[NodeInbound]:
-    # Все наши включенные инбаунды всегда попадают в подписку (при падении шлем алерт админу)
     inbounds = list(
         NodeInbound.objects.select_related("node").filter(
             is_enabled=True,
@@ -207,10 +220,7 @@ def _pick_diverse(
     return chosen_list, remaining
 
 
-def _select_working_public_uris(network_type: str | None, quota: int) -> list[str]:
-    if quota <= 0:
-        return []
-
+def _get_public_candidates(network_type: str | None) -> list[dict]:
     own_endpoint_keys: set[tuple[str, str, int]] = set()
     for inb in NodeInbound.objects.select_related("node").filter(
         is_enabled=True,
@@ -253,7 +263,39 @@ def _select_working_public_uris(network_type: str | None, quota: int) -> list[st
                 "latency": lat,
             }
 
-    pool = list(candidates_by_hash.values())
+    return list(candidates_by_hash.values())
+
+
+def _select_grouped_public_items_for_xray(network_type: str | None) -> list[dict]:
+    """
+    Для Happ/INCY берем ВСЕ доступные страны и до MAX_PUBLIC_PER_COUNTRY_IN_XRAY (15)
+    разнообразных серверов (по протоколам и источникам) внутри каждой страны.
+    """
+    pool = _get_public_candidates(network_type)
+    if not pool:
+        return []
+
+    by_country: dict[str, list[dict]] = {}
+    for item in pool:
+        by_country.setdefault(item["country_code"], []).append(item)
+
+    result: list[dict] = []
+    for cc in sorted(by_country.keys(), key=get_country_rank):
+        chosen, _ = _pick_diverse(
+            by_country[cc],
+            limit=MAX_PUBLIC_PER_COUNTRY_IN_XRAY,
+            prefer_distinct_tiers=False,
+        )
+        chosen.sort(key=lambda x: (x["proto"], x["latency"], x["id"]))
+        result.extend(chosen)
+    return result
+
+
+def _select_working_public_uris(network_type: str | None, quota: int) -> list[str]:
+    if quota <= 0:
+        return []
+
+    pool = _get_public_candidates(network_type)
     if not pool:
         return []
 
@@ -465,27 +507,27 @@ class SubscriptionGatewayView(View):
                     last_ip=client_ip,
                 )
 
-        # 6. Лимит: 30 для LTE/Wi-Fi и 40 для общей подписки
-        max_items = MAX_ITEMS_PER_NETWORK_SUB if net in ("lte", "wifi") else MAX_ITEMS_GENERAL_SUB
-        max_real_servers = max_items - 1
-
-        inbounds = _select_live_inbounds(network_type=net)[:max_real_servers]
-        public_quota = max(0, max_real_servers - len(inbounds))
-        public_uris = _select_working_public_uris(network_type=net, quota=public_quota)
-
-        # 7. Для Happ — Xray JSON с burstObservatory (автопереключение), остальным — base64
-        if is_happ_json_client(request, user_agent):
-            payload = build_happ_json_payload(
+        # 6. Для Happ и INCY отдаем сгруппированный по странам Xray JSON с leastLoad + costs,
+        #    для остальных клиентов — компактный base64
+        inbounds = _select_live_inbounds(network_type=net)
+        if is_xray_json_client(request, user_agent):
+            grouped_public = _select_grouped_public_items_for_xray(network_type=net)
+            payload = build_xray_country_grouped_payload(
                 subscription=subscription,
                 inbounds=inbounds,
+                public_items=grouped_public,
                 network_type=net,
-                extra_uris=public_uris,
             )
             content_type = "application/json; charset=utf-8"
         else:
+            max_items = MAX_ITEMS_PER_NETWORK_SUB if net in ("lte", "wifi") else MAX_ITEMS_GENERAL_SUB
+            max_real_servers = max_items - 1
+            trimmed_inbounds = inbounds[:max_real_servers]
+            public_quota = max(0, max_real_servers - len(trimmed_inbounds))
+            public_uris = _select_working_public_uris(network_type=net, quota=public_quota)
             payload = build_subscription_payload(
                 subscription=subscription,
-                inbounds=inbounds,
+                inbounds=trimmed_inbounds,
                 device_os=device_os,
                 user_agent=user_agent,
                 network_type=net,

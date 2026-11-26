@@ -5,6 +5,9 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from billing.models import Subscription
 from nodes.models import NodeInbound
+from probes.country_utils import get_country_display, get_country_rank
+
+MAX_AUTO_OUTBOUNDS = 18
 
 
 def _format_host(host: str) -> str:
@@ -23,14 +26,6 @@ def _build_remark(inbound: NodeInbound, remark_override: str | None = None) -> s
     else:
         label = name
     return quote(label, safe="")
-
-
-def _build_plain_remark(inbound: NodeInbound) -> str:
-    flag = inbound.node.flag_emoji.strip()
-    name = inbound.display_name.strip()
-    if flag and not name.startswith(flag):
-        return f"{flag} {name}"
-    return name
 
 
 def _replace_uri_remark(uri: str, new_remark: str) -> str:
@@ -213,11 +208,11 @@ def build_subscription_payload(
                 inbound=best_inbound,
                 device_os=device_os,
                 user_agent=user_agent,
-                remark_override="⚡ Лучший сервер",
+                remark_override="⭐ Автовыбор",
             )
         )
     elif public_uris:
-        uris.append(_replace_uri_remark(public_uris[0], "⚡ Лучший сервер"))
+        uris.append(_replace_uri_remark(public_uris[0], "⭐ Автовыбор"))
 
     for inbound in inbound_list:
         uris.append(
@@ -239,11 +234,10 @@ def _inbound_to_xray_outbound(
     subscription: Subscription,
     inbound: NodeInbound,
     tag: str,
-) -> tuple[str, dict] | None:
+) -> dict | None:
     extra = inbound.extra_params or {}
     host = inbound.connect_host
     port = int(inbound.connect_port)
-    remark = _build_plain_remark(inbound)
 
     if inbound.protocol == NodeInbound.Protocol.VLESS_REALITY:
         net_type = str(extra.get("type", "tcp") or "tcp").lower()
@@ -271,7 +265,7 @@ def _inbound_to_xray_outbound(
                 grpc_settings["authority"] = str(extra.get("authority"))
             stream["grpcSettings"] = grpc_settings
 
-        return remark, {
+        return {
             "tag": tag,
             "protocol": "vless",
             "settings": {"vnext": [{"address": host, "port": port, "users": [user_obj]}]},
@@ -299,7 +293,7 @@ def _inbound_to_xray_outbound(
                 "fingerprint": str(extra.get("fp", "chrome") or "chrome"),
                 "alpn": alpn_list or ["http/1.1"],
             }
-        return remark, {
+        return {
             "tag": tag,
             "protocol": "vless",
             "settings": {
@@ -344,7 +338,7 @@ def _inbound_to_xray_outbound(
                 "udp": [{"type": "salamander", "settings": {"password": obfs_pwd}}]
             }
 
-        return remark, {
+        return {
             "tag": tag,
             "protocol": "hysteria",
             "settings": {"version": 2, "address": host, "port": port},
@@ -354,7 +348,7 @@ def _inbound_to_xray_outbound(
     return None
 
 
-def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
+def _uri_to_xray_outbound(uri: str, tag: str) -> dict | None:
     parsed = urlparse(uri.strip())
     scheme = parsed.scheme.lower()
     host = parsed.hostname
@@ -362,7 +356,6 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
     if not host or not port:
         return None
 
-    remark = unquote(parsed.fragment or "").strip() or f"{host}:{port}"
     params = parse_qs(parsed.query, keep_blank_values=True)
 
     def q(name: str, default: str = "") -> str:
@@ -420,7 +413,7 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
                 grpc_settings["authority"] = q("authority")
             stream["grpcSettings"] = grpc_settings
 
-        return remark, {
+        return {
             "tag": tag,
             "protocol": "vless",
             "settings": {"vnext": [{"address": host, "port": int(port), "users": [user_obj]}]},
@@ -457,7 +450,7 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
                 "udp": [{"type": "salamander", "settings": {"password": q("obfs-password")}}]
             }
 
-        return remark, {
+        return {
             "tag": tag,
             "protocol": "hysteria",
             "settings": {"version": 2, "address": host, "port": int(port)},
@@ -467,11 +460,7 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> tuple[str, dict] | None:
     return None
 
 
-def _make_xray_skeleton(
-    remarks: str,
-    outbounds: list[dict],
-    use_auto_balancer: bool = False,
-) -> dict:
+def _make_xray_group_config(remarks: str, outbounds: list[dict]) -> dict:
     config: dict = {
         "remarks": remarks,
         "log": {"loglevel": "warning"},
@@ -487,14 +476,17 @@ def _make_xray_skeleton(
         ],
         "outbounds": outbounds + [{"tag": "direct", "protocol": "freedom"}],
     }
-    if use_auto_balancer:
+
+    if len(outbounds) >= 2:
+        prefixes = [p for p in ("prem-", "pub-") if any(o["tag"].startswith(p) for o in outbounds)]
         config["burstObservatory"] = {
-            "subjectSelector": ["proxy-"],
+            "subjectSelector": prefixes,
             "pingConfig": {
-                "destination": "https://www.google.com/generate_204",
-                "interval": "30s",
-                "sampling": 3,
-                "timeout": "5s",
+                "destination": "https://cp.cloudflare.com/generate_204",
+                "connectivity": "http://cp.cloudflare.com/generate_204",
+                "interval": "25s",
+                "sampling": 2,
+                "timeout": "2s",
             },
         }
         config["routing"] = {
@@ -502,9 +494,21 @@ def _make_xray_skeleton(
             "balancers": [
                 {
                     "tag": "auto-balancer",
-                    "selector": ["proxy-"],
+                    "selector": prefixes,
                     "fallbackTag": outbounds[0]["tag"],
-                    "strategy": {"type": "leastPing"},
+                    "strategy": {
+                        "type": "leastLoad",
+                        "settings": {
+                            "costs": [
+                                {"regexp": False, "match": "prem-", "value": 0.05},
+                                {"regexp": False, "match": "pub-", "value": 3.0},
+                            ],
+                            "expected": 1,
+                            "maxRTT": "900ms",
+                            "tolerance": 0.01,
+                            "baselines": ["150ms", "350ms", "700ms"],
+                        },
+                    },
                 }
             ],
             "rules": [
@@ -526,61 +530,97 @@ def _make_xray_skeleton(
                 }
             ],
         }
+
     return config
 
 
-def build_happ_json_payload(
+def build_xray_country_grouped_payload(
     subscription: Subscription,
     inbounds: Iterable[NodeInbound],
+    public_items: Iterable[dict],
     network_type: str | None = None,
-    extra_uris: Iterable[str] = (),
 ) -> str:
+    """
+    Собирает массив Xray JSON для Happ / INCY:
+    1) «⭐ Автовыбор» (наши премиум-ноды + лучшие публичные по странам, leastLoad + costs).
+    2) Страны по порядку приоритета (NL -> DE -> SE -> FI -> LV -> остальные -> Прочие),
+       внутри каждой страны — автовыбор по всем ее серверам (с приоритетом наших).
+    """
     inbound_list = list(inbounds)
-    public_uris = [u.strip() for u in extra_uris if u and u.strip()]
+    pub_list = list(public_items)
 
+    # Сначала строим пулы по странам
+    country_groups: dict[str, list[dict]] = {}
+
+    # Ставим лучший наш инбаунд первым среди премиумов
     best_inbound, _ = select_best_inbound(inbound_list, network_type=network_type)
     ordered_inbounds = list(inbound_list)
     if best_inbound is not None and best_inbound in ordered_inbounds:
         ordered_inbounds.remove(best_inbound)
         ordered_inbounds.insert(0, best_inbound)
 
-    entries: list[tuple[str, dict]] = []
-    idx = 0
-    for inb in ordered_inbounds:
-        converted = _inbound_to_xray_outbound(subscription, inb, tag=f"proxy-{idx}")
-        if converted is not None:
-            entries.append(converted)
-            idx += 1
+    prem_outbounds_all: list[dict] = []
+    for idx, inb in enumerate(ordered_inbounds):
+        cc = (inb.node.country_code or "").upper().strip() or "ZZ"
+        out = _inbound_to_xray_outbound(subscription, inb, tag=f"prem-{idx}")
+        if out is None:
+            continue
+        prem_outbounds_all.append(out)
+        country_groups.setdefault(cc, []).append(
+            _inbound_to_xray_outbound(subscription, inb, tag=f"prem-{len(country_groups.get(cc, []))}")
+        )
 
-    for uri in public_uris:
-        converted = _uri_to_xray_outbound(uri, tag=f"proxy-{idx}")
-        if converted is not None:
-            entries.append(converted)
-            idx += 1
+    pub_outbounds_by_country: dict[str, list[dict]] = {}
+    for item in pub_list:
+        cc = (item.get("country_code") or "").upper().strip() or "ZZ"
+        cur_list = country_groups.setdefault(cc, [])
+        pub_idx = sum(1 for o in cur_list if o["tag"].startswith("pub-"))
+        out = _uri_to_xray_outbound(item["uri"], tag=f"pub-{pub_idx}")
+        if out is None:
+            continue
+        cur_list.append(out)
+        pub_outbounds_by_country.setdefault(cc, []).append(out)
 
-    if not entries:
+    if not country_groups:
         return "[]"
 
     configs: list[dict] = []
 
-    auto_outbounds = [outbound for _, outbound in entries]
-    configs.append(
-        _make_xray_skeleton(
-            remarks="⚡ Лучший сервер",
-            outbounds=auto_outbounds,
-            use_auto_balancer=True,
-        )
-    )
+    # 1. Глобальный «⭐ Автовыбор»: все наши премиум (до 10) + до 2 публичных из топ-стран (итого <= 18)
+    auto_outbounds: list[dict] = []
+    for i, out in enumerate(prem_outbounds_all[:10]):
+        cloned = dict(out)
+        cloned["tag"] = f"prem-{i}"
+        auto_outbounds.append(cloned)
 
-    for remark, outbound in entries:
-        single_outbound = dict(outbound)
-        single_outbound["tag"] = "proxy"
-        configs.append(
-            _make_xray_skeleton(
-                remarks=remark,
-                outbounds=[single_outbound],
-                use_auto_balancer=False,
-            )
-        )
+    sorted_country_codes = sorted(country_groups.keys(), key=get_country_rank)
+
+    pub_counter = 0
+    round_idx = 0
+    while len(auto_outbounds) < MAX_AUTO_OUTBOUNDS and round_idx < 3:
+        added_any = False
+        for cc in sorted_country_codes:
+            if len(auto_outbounds) >= MAX_AUTO_OUTBOUNDS:
+                break
+            cc_pubs = pub_outbounds_by_country.get(cc) or []
+            if round_idx < len(cc_pubs):
+                cloned = dict(cc_pubs[round_idx])
+                cloned["tag"] = f"pub-{pub_counter}"
+                auto_outbounds.append(cloned)
+                pub_counter += 1
+                added_any = True
+        if not added_any:
+            break
+        round_idx += 1
+
+    if auto_outbounds:
+        configs.append(_make_xray_group_config(remarks="⭐ Автовыбор", outbounds=auto_outbounds))
+
+    # 2. Конфиги по странам (все доступные)
+    for cc in sorted_country_codes:
+        outbounds = country_groups[cc]
+        if not outbounds:
+            continue
+        configs.append(_make_xray_group_config(remarks=get_country_display(cc), outbounds=outbounds))
 
     return json.dumps(configs, ensure_ascii=False)

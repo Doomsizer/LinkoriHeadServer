@@ -171,10 +171,10 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# Шлюз подписок
+# Шлюз подписок (автообновление строго 1 час)
 SUB_GATEWAY_HOST = os.getenv("SUB_GATEWAY_HOST", "sub.linkori.org").lower()
 SUB_PROFILE_TITLE = os.getenv("SUB_PROFILE_TITLE", "Linkori")
-SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "6"))
+SUB_UPDATE_INTERVAL_HOURS = int(os.getenv("SUB_UPDATE_INTERVAL_HOURS", "1"))
 SUB_SUPPORT_URL = os.getenv("SUB_SUPPORT_URL", "https://t.me/Linkorisupport")
 SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 SUB_ANNOUNCE_TEXT = os.getenv("SUB_ANNOUNCE_TEXT", "Сайт: linkori.org | Бот: @linkoribot")

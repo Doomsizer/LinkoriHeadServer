@@ -25,6 +25,7 @@ SECONDARY_COUNTRIES: set[str] = {
     "BE",
     "LU",
     "RO",
+    "MD",
     "BG",
     "HU",
     "SK",
@@ -34,6 +35,53 @@ SECONDARY_COUNTRIES: set[str] = {
     "IS",
     "US",
     "CA",
+}
+
+COUNTRY_NAMES_RU: dict[str, str] = {
+    "NL": "Нидерланды",
+    "DE": "Германия",
+    "SE": "Швеция",
+    "FI": "Финляндия",
+    "LV": "Латвия",
+    "PL": "Польша",
+    "EE": "Эстония",
+    "LT": "Литва",
+    "FR": "Франция",
+    "GB": "Великобритания",
+    "CH": "Швейцария",
+    "AT": "Австрия",
+    "CZ": "Чехия",
+    "NO": "Норвегия",
+    "DK": "Дания",
+    "ES": "Испания",
+    "IT": "Италия",
+    "IE": "Ирландия",
+    "BE": "Бельгия",
+    "LU": "Люксембург",
+    "RO": "Румыния",
+    "MD": "Молдова",
+    "BG": "Болгария",
+    "HU": "Венгрия",
+    "SK": "Словакия",
+    "SI": "Словения",
+    "PT": "Португалия",
+    "GR": "Греция",
+    "IS": "Исландия",
+    "US": "США",
+    "CA": "Канада",
+    "BR": "Бразилия",
+    "TR": "Турция",
+    "JP": "Япония",
+    "SG": "Сингапур",
+    "AE": "ОАЭ",
+    "IN": "Индия",
+    "KZ": "Казахстан",
+    "HK": "Гонконг",
+    "KR": "Корея",
+    "AR": "Аргентина",
+    "AU": "Австралия",
+    "UA": "Украина",
+    "RU": "Россия",
 }
 
 COUNTRY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -54,6 +102,12 @@ COUNTRY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("DK", ("дани", "копенгаген", "denmark", "copenhagen")),
     ("ES", ("испани", "мадрид", "spain", "madrid")),
     ("IT", ("итали", "милан", "рим", "italy", "milan")),
+    ("IE", ("ирланди", "дублин", "ireland", "dublin")),
+    ("BE", ("бельги", "брюссель", "belgium", "brussels")),
+    ("RO", ("румыни", "бухарест", "romania", "bucharest")),
+    ("MD", ("молдов", "молдави", "кишинев", "moldova", "chisinau")),
+    ("BG", ("болгари", "софия", "bulgaria", "sofia")),
+    ("HU", ("венгри", "будапешт", "hungary", "budapest")),
     ("US", ("сша", "америк", "нью-йорк", "united states", "usa", "ashburn", "dallas", "new york", "los angeles")),
     ("CA", ("канад", "торонто", "canada", "toronto")),
     ("BR", ("бразили", "сан-паулу", "brazil", "sao paulo")),
@@ -72,18 +126,33 @@ COUNTRY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 KNOWN_ISO_CODES: set[str] = (
     set(PRIORITY_COUNTRIES.keys())
     | SECONDARY_COUNTRIES
-    | {"BR", "TR", "JP", "SG", "AE", "IN", "KZ", "HK", "KR", "AR", "AU", "RU", "UA", "MD"}
+    | set(COUNTRY_NAMES_RU.keys())
 )
 
 
 def _extract_flag_iso(text: str) -> str:
-    # Декодируем любую пару Unicode Regional Indicator (🇦..🇿) в ISO-код страны
     chars = list(text)
     for i in range(len(chars) - 1):
         c1, c2 = ord(chars[i]), ord(chars[i + 1])
         if 0x1F1E6 <= c1 <= 0x1F1FF and 0x1F1E6 <= c2 <= 0x1F1FF:
             return chr(ord("A") + (c1 - 0x1F1E6)) + chr(ord("A") + (c2 - 0x1F1E6))
     return ""
+
+
+def iso_to_flag_emoji(country_code: str) -> str:
+    code = (country_code or "").upper().strip()
+    if len(code) != 2 or not code.isalpha() or code == "ZZ":
+        return "🌐"
+    return chr(0x1F1E6 + ord(code[0]) - ord("A")) + chr(0x1F1E6 + ord(code[1]) - ord("A"))
+
+
+def get_country_display(country_code: str) -> str:
+    code = (country_code or "").upper().strip()
+    if not code or code == "ZZ":
+        return "🌐 Прочие"
+    flag = iso_to_flag_emoji(code)
+    name = COUNTRY_NAMES_RU.get(code, code)
+    return f"{flag} {name}"
 
 
 def detect_country_code(uri: str) -> str:
@@ -100,7 +169,6 @@ def detect_country_code(uri: str) -> str:
         if any(kw in remark_lower for kw in keywords):
             return code
 
-    # Проверяем префиксы/токены вроде "NL-", "[DE]", "FI 1", "pl.example.com"
     tokens = [
         t.strip("[](){}|:-_., ")
         for t in remark.replace("-", " ").replace("_", " ").split()
@@ -122,19 +190,12 @@ def detect_country_code(uri: str) -> str:
 
 
 def get_country_rank(country_code: str) -> tuple[int, int, str]:
-    """
-    Возвращает кортеж для сортировки:
-    (tier, priority_num, country_code)
-    tier 0: NL (1), DE (2), SE (3), FI (4), LV (5)
-    tier 1: прочая Европа / США / Канада
-    tier 2: дальние страны (Бразилия и т.п.) и неопределенные
-    """
     code = (country_code or "").upper().strip()
     if code in PRIORITY_COUNTRIES:
         return (0, PRIORITY_COUNTRIES[code], code)
     if code in SECONDARY_COUNTRIES:
         return (1, 10, code)
-    if code:
+    if code and code != "ZZ":
         return (2, 50, code)
     return (2, 99, "ZZ")
 
