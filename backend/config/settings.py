@@ -180,6 +180,10 @@ SUB_WEB_URL = os.getenv("SUB_WEB_URL", "https://linkori.org")
 SUB_ANNOUNCE_TEXT = os.getenv("SUB_ANNOUNCE_TEXT", "Сайт: linkori.org | Бот: @linkoribot")
 SUB_ANNOUNCE_URL = os.getenv("SUB_ANNOUNCE_URL", "https://t.me/linkoribot")
 
+# Админская/тестовая подписка: все серверы плоским списком Xray JSON, без balancer
+# и без burstObservatory. Пустая переменная = режим выключен, роут отдает 404.
+SUB_ADMIN_TOKEN = os.getenv("SUB_ADMIN_TOKEN", "").strip()
+
 # Токены внутренних интеграций, Telegram-бот и алерты админу
 PROBE_API_TOKEN = os.getenv("PROBE_API_TOKEN", "")
 PROBE_XRAY_UUID = os.getenv("PROBE_XRAY_UUID", "")

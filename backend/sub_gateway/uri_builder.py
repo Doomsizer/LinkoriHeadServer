@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Iterable
+from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from billing.models import Subscription
@@ -9,6 +10,23 @@ from probes.country_utils import get_country_display, get_country_rank
 
 MAX_AUTO_OUTBOUNDS = 18
 
+# Потолок outbound'ов в одном Xray JSON конфиге. Happ на iOS держит ядро в
+# 50 МБ, поэтому большие списки в один конфиг не складываем.
+MAX_OUTBOUNDS_PER_CONFIG = 18
+
+# Потолок числа профилей в JSON подписке. Happ запускает отдельное ядро на каждый
+# профиль, поэтому 40+ конфигов дают минутную проверку и жрут память на iOS.
+MAX_XRAY_CONFIGS = 16
+
+# Проба идет через сам прокси (хендшейк + TLS до пробного хоста), поэтому на LTE
+# и до дальних нод ей нужен запас по времени. Цикл проверки = interval * sampling.
+BURST_PING_INTERVAL = "15s"
+BURST_PING_SAMPLING = 3
+BURST_PING_TIMEOUT = "5s"
+LEAST_LOAD_MAX_RTT = "2500ms"
+# Доля допустимых провалов в выборке: 1 провал из 3 проб проходит, 2 из 3 отсекаются.
+LEAST_LOAD_TOLERANCE = 0.5
+
 
 def _format_host(host: str) -> str:
     if ":" in host and not host.startswith("["):
@@ -16,16 +34,18 @@ def _format_host(host: str) -> str:
     return host
 
 
-def _build_remark(inbound: NodeInbound, remark_override: str | None = None) -> str:
+def _build_label(inbound: NodeInbound, remark_override: str | None = None) -> str:
     if remark_override:
-        return quote(remark_override.strip(), safe="")
+        return remark_override.strip()
     flag = inbound.node.flag_emoji.strip()
     name = inbound.display_name.strip()
     if flag and not name.startswith(flag):
-        label = f"{flag} {name}"
-    else:
-        label = name
-    return quote(label, safe="")
+        return f"{flag} {name}"
+    return name
+
+
+def _build_remark(inbound: NodeInbound, remark_override: str | None = None) -> str:
+    return quote(_build_label(inbound, remark_override=remark_override), safe="")
 
 
 def _replace_uri_remark(uri: str, new_remark: str) -> str:
@@ -186,6 +206,17 @@ def select_best_inbound(
 
     best = min(inbounds, key=sort_key)
     return best, _get_inbound_latency(best, network_type)
+
+
+def _inbound_preference_key(inbound: NodeInbound, network_type: str | None) -> tuple:
+    latency = _get_inbound_latency(inbound, network_type)
+    return (
+        _get_inbound_health_rank(inbound, network_type),
+        latency is None,
+        latency if latency is not None else 10**9,
+        inbound.node.priority,
+        inbound.id,
+    )
 
 
 def build_subscription_payload(
@@ -460,7 +491,21 @@ def _uri_to_xray_outbound(uri: str, tag: str) -> dict | None:
     return None
 
 
+def _trim_outbounds(outbounds: list[dict]) -> list[dict]:
+    """
+    Держим конфиг в бюджете клиента (iOS-расширение Happ падает по памяти на больших
+    списках). Свои серверы (prem-) не выбрасываем никогда, режем только публичные.
+    """
+    if len(outbounds) <= MAX_OUTBOUNDS_PER_CONFIG:
+        return outbounds
+    prem = [o for o in outbounds if o.get("tag", "").startswith("prem-")]
+    public = [o for o in outbounds if not o.get("tag", "").startswith("prem-")]
+    room = max(0, MAX_OUTBOUNDS_PER_CONFIG - len(prem))
+    return prem + public[:room]
+
+
 def _make_xray_group_config(remarks: str, outbounds: list[dict]) -> dict:
+    outbounds = _trim_outbounds(list(outbounds))
     config: dict = {
         "remarks": remarks,
         "log": {"loglevel": "warning"},
@@ -484,9 +529,9 @@ def _make_xray_group_config(remarks: str, outbounds: list[dict]) -> dict:
             "pingConfig": {
                 "destination": "https://cp.cloudflare.com/generate_204",
                 "connectivity": "http://cp.cloudflare.com/generate_204",
-                "interval": "25s",
-                "sampling": 2,
-                "timeout": "2s",
+                "interval": BURST_PING_INTERVAL,
+                "sampling": BURST_PING_SAMPLING,
+                "timeout": BURST_PING_TIMEOUT,
             },
         }
         config["routing"] = {
@@ -504,8 +549,8 @@ def _make_xray_group_config(remarks: str, outbounds: list[dict]) -> dict:
                                 {"regexp": False, "match": "pub-", "value": 3.0},
                             ],
                             "expected": 1,
-                            "maxRTT": "900ms",
-                            "tolerance": 0.01,
+                            "maxRTT": LEAST_LOAD_MAX_RTT,
+                            "tolerance": LEAST_LOAD_TOLERANCE,
                             "baselines": ["150ms", "350ms", "700ms"],
                         },
                     },
@@ -552,13 +597,12 @@ def build_xray_country_grouped_payload(
     # Сначала строим пулы по странам
     country_groups: dict[str, list[dict]] = {}
 
-    # Ставим лучший наш инбаунд первым среди премиумов
-    best_inbound, _ = select_best_inbound(inbound_list, network_type=network_type)
-    ordered_inbounds = list(inbound_list)
-    if best_inbound is not None and best_inbound in ordered_inbounds:
-        ordered_inbounds.remove(best_inbound)
-        ordered_inbounds.insert(0, best_inbound)
-
+    # Порядок: живые и быстрые серверы первыми. Первый outbound становится fallbackTag,
+    # поэтому пока balancer не набрал статистику, трафик идет через заведомо живой сервер.
+    ordered_inbounds = sorted(
+        inbound_list,
+        key=lambda inb: _inbound_preference_key(inb, network_type),
+    )
     prem_outbounds_all: list[dict] = []
     for idx, inb in enumerate(ordered_inbounds):
         cc = (inb.node.country_code or "").upper().strip() or "ZZ"
@@ -586,7 +630,8 @@ def build_xray_country_grouped_payload(
 
     configs: list[dict] = []
 
-    # 1. Глобальный «⭐ Автовыбор»: все наши премиум (до 10) + до 2 публичных из топ-стран (итого <= 18)
+    # 1. Глобальный «⭐ Автовыбор»: наши премиум-ноды (до 10) + публичные из топ-стран,
+    #    пока не упремся в MAX_AUTO_OUTBOUNDS
     auto_outbounds: list[dict] = []
     for i, out in enumerate(prem_outbounds_all[:10]):
         cloned = dict(out)
@@ -616,11 +661,60 @@ def build_xray_country_grouped_payload(
     if auto_outbounds:
         configs.append(_make_xray_group_config(remarks="⭐ Автовыбор", outbounds=auto_outbounds))
 
-    # 2. Конфиги по странам (все доступные)
-    for cc in sorted_country_codes:
-        outbounds = country_groups[cc]
-        if not outbounds:
-            continue
-        configs.append(_make_xray_group_config(remarks=get_country_display(cc), outbounds=outbounds))
+    # 2. Конфиги по странам: сначала страны, где есть наши серверы (их терять нельзя),
+    #    затем публичные по приоритету, пока не упремся в бюджет профилей клиента.
+    our_countries = {
+        cc
+        for cc, items in country_groups.items()
+        if any(item.get("tag", "").startswith("prem-") for item in items)
+    }
+    config_order = sorted(
+        (cc for cc in sorted_country_codes if country_groups[cc]),
+        key=lambda cc: (0 if cc in our_countries else 1, get_country_rank(cc)),
+    )
 
+    budget = MAX_XRAY_CONFIGS - len(configs)
+    for cc in config_order:
+        if budget <= 0:
+            break
+        configs.append(
+            _make_xray_group_config(
+                remarks=get_country_display(cc),
+                outbounds=country_groups[cc],
+            )
+        )
+        budget -= 1
+
+    return json.dumps(configs, ensure_ascii=False)
+
+
+PROTOCOL_SHORT_LABELS = {
+    NodeInbound.Protocol.VLESS_REALITY: "Reality",
+    NodeInbound.Protocol.VLESS_WS: "WS",
+    NodeInbound.Protocol.HYSTERIA2: "Hy2",
+}
+
+
+def _flat_remark(inbound: NodeInbound) -> str:
+    proto = PROTOCOL_SHORT_LABELS.get(inbound.protocol, inbound.protocol)
+    return f"{_build_label(inbound)} · {proto} · {inbound.connect_host}:{inbound.connect_port}"
+
+
+def build_xray_flat_payload(items: Iterable[tuple[NodeInbound, str]]) -> str:
+    """
+    Плоский список Xray JSON для админской/тестовой подписки: один конфиг на один инбаунд,
+    без balancer и без observatory. Клиент проверяет и подключает сервер напрямую,
+    поэтому такой список показывает реальное состояние серверов, а не работу balancer.
+
+    items: пары (инбаунд, Xray UUID). В админской подписке используется probe-клиент ноды.
+    """
+    configs: list[dict] = []
+    for inbound, xray_uuid in items:
+        target = SimpleNamespace(xray_uuid=xray_uuid)
+        outbound = _inbound_to_xray_outbound(target, inbound, tag="proxy")
+        if outbound is None:
+            continue
+        configs.append(
+            _make_xray_group_config(remarks=_flat_remark(inbound), outbounds=[outbound])
+        )
     return json.dumps(configs, ensure_ascii=False)

@@ -1,6 +1,9 @@
 import base64
+import logging
 import re
+import secrets
 from collections import Counter
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -19,14 +22,21 @@ from probes.country_utils import (
 )
 from probes.models import WorkingPublicConfig
 
-from .uri_builder import build_subscription_payload, build_xray_country_grouped_payload
+from .uri_builder import (
+    build_inbound_uri,
+    build_subscription_payload,
+    build_xray_country_grouped_payload,
+    build_xray_flat_payload,
+)
+
+logger = logging.getLogger(__name__)
 
 HWID_REGEX = re.compile(r"^[a-zA-Z0-9=_-]{8,128}$")
 
 MAX_ITEMS_PER_NETWORK_SUB = 30
 MAX_ITEMS_GENERAL_SUB = 40
 TAIL_EXTRA_COUNTRIES_COUNT = 5
-MAX_PUBLIC_PER_COUNTRY_IN_XRAY = 15
+MAX_PUBLIC_PER_COUNTRY_IN_XRAY = 8
 
 DEEPLINK_SCHEMES = {
     "happ": ("Happ", "happ://add/{sub_url}"),
@@ -118,6 +128,43 @@ def build_subscription_headers(
         headers["announce-url"] = announce_url
 
     return headers
+
+
+def is_admin_test_token(sub_token: str) -> bool:
+    """
+    Токен админской/тестовой подписки. Задается в .env как SUB_ADMIN_TOKEN.
+    Пока переменная пустая, режим полностью выключен.
+    """
+    expected = str(getattr(settings, "SUB_ADMIN_TOKEN", "") or "").strip()
+    if not expected:
+        return False
+    return secrets.compare_digest((sub_token or "").strip(), expected)
+
+
+def resolve_probe_xray_uuid(inbound: NodeInbound) -> str:
+    """UUID сервисного клиента ноды (linkori_probe_admin) — тот же, которым ходят probes."""
+    extra = inbound.extra_params or {}
+    node_uuid = str(inbound.node.probe_xray_uuid or "").strip()
+    fallback = str(getattr(settings, "PROBE_XRAY_UUID", "") or "").strip()
+    return str(extra.get("probe_xray_uuid") or node_uuid or fallback or "").strip()
+
+
+def build_admin_test_headers(network_type: str | None = None) -> dict[str, str]:
+    title = f"{settings.SUB_PROFILE_TITLE} TEST"
+    if network_type == "lte":
+        title = f"{title} LTE"
+    elif network_type == "wifi":
+        title = f"{title} Wi-Fi"
+
+    title_b64 = base64.b64encode(title.encode("utf-8")).decode("ascii")
+    return {
+        "profile-title": f"base64:{title_b64}",
+        "profile-update-interval": "1",
+        "subscription-userinfo": "upload=0; download=0; total=0; expire=0",
+        "content-disposition": 'attachment; filename="linkori-test"',
+        "support-url": settings.SUB_SUPPORT_URL,
+        "profile-web-page-url": settings.SUB_WEB_URL,
+    }
 
 
 def _uri_protocol_family(uri: str) -> str:
@@ -354,7 +401,9 @@ class SubscriptionOpenAppView(View):
         if app_entry is None:
             return HttpResponse(status=404)
 
-        if not Subscription.objects.filter(sub_token=sub_token).exists():
+        if not Subscription.objects.filter(sub_token=sub_token).exists() and not is_admin_test_token(
+            sub_token
+        ):
             return HttpResponse(status=404)
 
         app_label, template_uri = app_entry
@@ -388,23 +437,35 @@ class SubscriptionGatewayView(View):
         if net not in ("lte", "wifi"):
             net = None
 
-        subscription = (
-            Subscription.objects.select_related("user", "plan")
-            .filter(sub_token=sub_token)
-            .first()
-        )
+        is_admin_test = is_admin_test_token(sub_token)
+
+        subscription = None
+        if not is_admin_test:
+            subscription = (
+                Subscription.objects.select_related("user", "plan")
+                .filter(sub_token=sub_token)
+                .first()
+            )
 
         # 1. Отсекаем браузеры красивой страницей без конфигов серверов
         if is_browser_request(request):
             base_sub_url = f"https://{settings.SUB_GATEWAY_HOST}/{sub_token}"
             prefix = f"{base_sub_url}/{net}" if net else base_sub_url
             context = {
-                "sub_exists": subscription is not None,
+                "sub_exists": subscription is not None or is_admin_test,
                 "web_url": settings.SUB_WEB_URL,
                 "support_url": settings.SUB_SUPPORT_URL,
-                "plan_name": subscription.plan.name if subscription else "",
+                "plan_name": (
+                    "Админская тестовая"
+                    if is_admin_test
+                    else (subscription.plan.name if subscription else "")
+                ),
                 "expires_date": (
-                    subscription.expires_at.strftime("%d.%m.%Y") if subscription else ""
+                    "бессрочно"
+                    if is_admin_test
+                    else (
+                        subscription.expires_at.strftime("%d.%m.%Y") if subscription else ""
+                    )
                 ),
                 "sub_url": prefix,
                 "sub_lte_url": f"{base_sub_url}/lte",
@@ -423,7 +484,11 @@ class SubscriptionGatewayView(View):
             response["Cache-Control"] = "no-store, no-cache, must-revalidate"
             return response
 
-        # 2. Токен не найден
+        # 2. Админская/тестовая подписка: все серверы плоским списком, без balancer
+        if is_admin_test:
+            return self._admin_test_response(request, network_type=net)
+
+        # 3. Токен не найден
         if subscription is None:
             return HttpResponse(status=404)
 
@@ -538,6 +603,54 @@ class SubscriptionGatewayView(View):
         response = HttpResponse(payload, content_type=content_type, status=200)
         for header_name, header_value in build_subscription_headers(
             subscription, network_type=net
+        ).items():
+            response[header_name] = header_value
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return response
+
+    def _admin_test_response(self, request, network_type: str | None) -> HttpResponse:
+        """
+        Админская/тестовая подписка: все включенные серверы, каждый отдельным Xray JSON
+        конфигом, без burstObservatory и без balancer. Нужна для тестов и дополнительного
+        отслеживания: клиент проверяет и подключает сервер напрямую, поэтому видно,
+        живой ли сам сервер, отдельно от работы автовыбора.
+
+        UUID берется у сервисного клиента ноды (linkori_probe_admin), чтобы не расходовать
+        трафик пользователей. Ни HWID, ни срок действия, ни лимит устройств не проверяются.
+        """
+        user_agent = request.headers.get("User-Agent", "").strip()[:255]
+        inbounds = _select_live_inbounds(network_type=network_type)
+
+        items: list[tuple[NodeInbound, str]] = []
+        for inbound in inbounds:
+            probe_uuid = resolve_probe_xray_uuid(inbound)
+            if not probe_uuid:
+                logger.warning(
+                    "Админская подписка: у инбаунда %s (%s:%s) нет probe_xray_uuid",
+                    inbound.id,
+                    inbound.connect_host,
+                    inbound.connect_port,
+                )
+                continue
+            items.append((inbound, probe_uuid))
+
+        if is_xray_json_client(request, user_agent):
+            payload = build_xray_flat_payload(items)
+            content_type = "application/json; charset=utf-8"
+        else:
+            uris = [
+                build_inbound_uri(
+                    subscription=SimpleNamespace(xray_uuid=xray_uuid),
+                    inbound=inbound,
+                )
+                for inbound, xray_uuid in items
+            ]
+            payload = base64.b64encode("\n".join(uris).encode("utf-8")).decode("ascii")
+            content_type = "text/plain; charset=utf-8"
+
+        response = HttpResponse(payload, content_type=content_type, status=200)
+        for header_name, header_value in build_admin_test_headers(
+            network_type=network_type
         ).items():
             response[header_name] = header_value
         response["Cache-Control"] = "no-store, no-cache, must-revalidate"

@@ -58,3 +58,6 @@ tokens.txt
 #bot
 bot_repo/
 bot.env
+
+#AI
+AGENTS.md
